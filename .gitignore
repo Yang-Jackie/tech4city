@@ -1,4 +1,9 @@
-data/
+data/ntuconfessit.json
+data/nusconfessit.json
+data/ntu_processed.json
+data/nus_processed.json
+data/ntu_processed.npy
+data/nus_processed.npy
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
