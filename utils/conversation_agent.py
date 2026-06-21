@@ -140,7 +140,7 @@ def build_conversations(
 
 if __name__ == "__main__":
     print("NTU Dataset:")
-    SAMPLES_PER_TOPIC_ID = 10 # 100
+    SAMPLES_PER_TOPIC_ID = 100 # 10
     build_conversations(
         "data/ntu_kmeans.json",
         "data/ntu_processed.json",
