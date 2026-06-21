@@ -1,0 +1,79 @@
+{
+  "A": [],
+  "B": [
+    {
+      "topic_id": 4,
+      "topic_text": "Missed romantic connections and lingering regret over relationships that drifted apart"
+    }
+  ],
+  "C": [
+    {
+      "topic_id": 14,
+      "topic_text": "aggressive/hostile complaints, insults, and calls to report or punish someone"
+    },
+    {
+      "topic_id": 5,
+      "topic_text": "Repetitive vulgar and aggressive spam text featuring boastful profanity, repeated username/handle strings, and repeated hostile commands."
+    }
+  ],
+  "D": [
+    {
+      "topic_id": 15,
+      "topic_text": "Casual social media chatter mixing enthusiasm, agreement, and jokes about cricket/Indian Cricket Council, with flirtatious comments about Indian guys in cricket circles."
+    },
+    {
+      "topic_id": 13,
+      "topic_text": "Anonymous campus hall gossip and social chatter about residents, dating/sex, attractiveness, and hall culture"
+    },
+    {
+      "topic_id": 8,
+      "topic_text": "Cross-university student complaints and comparisons between NTU and NUS"
+    },
+    {
+      "topic_id": 2,
+      "topic_text": "casual chat about travel plans, exchange, journey well-wishes, and a brief timing concern, with some slang and frustration"
+    },
+    {
+      "topic_id": 1,
+      "topic_text": "Crushes, attraction, and uncertainty about making the first move in dating"
+    },
+    {
+      "topic_id": 6,
+      "topic_text": "Discussion about North Spine/student areas at night, anonymous comments not working, and miscellaneous replies/fandom remarks"
+    },
+    {
+      "topic_id": 11,
+      "topic_text": "Apologies, student life, school pride, and a funny lecture mishap among university students"
+    },
+    {
+      "topic_id": 10,
+      "topic_text": "making friends, dating, and matchmaking posts in a school confession group"
+    },
+    {
+      "topic_id": 12,
+      "topic_text": "ambiguous social/media chat prompts and casual questions"
+    },
+    {
+      "topic_id": 7,
+      "topic_text": "Casual student/NS life confessions and comments about dating, hookups, regrets, stereotypes, and hygiene"
+    },
+    {
+      "topic_id": 0,
+      "topic_text": "Students discussing module choices, exchange programs, and opinions about faculties/schools."
+    }
+  ],
+  "E": [
+    {
+      "topic_id": 9,
+      "topic_text": "Internship stress, regret, and debate over experience vs GPA"
+    }
+  ],
+  "F": [],
+  "G": [
+    {
+      "topic_id": 3,
+      "topic_text": "Sexualized and appearance-focused social media comments about women, including flirtation, objectification, and teasing."
+    }
+  ],
+  "H": []
+}

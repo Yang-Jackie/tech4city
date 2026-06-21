@@ -1,0 +1,98 @@
+{
+  "A": [
+    {
+      "topic_id": 18,
+      "topic_text": "Assorted chat messages about platform/group usage and a math asymptotic question, including privacy, moderation/censorship concerns, replying in a new group, outreach to non-CS groups, and proving sqrt(n)(log n)^2 = O(n)."
+    },
+    {
+      "topic_id": 3,
+      "topic_text": "Student life at NUS, focusing on academic stress, SU culture, toxic environments, dissatisfaction with NUSC, and calls to enjoy campus life beyond studying."
+    },
+    {
+      "topic_id": 13,
+      "topic_text": "Students joking and venting about CS/NUS modules, difficulty, and assessment structures"
+    },
+    {
+      "topic_id": 1,
+      "topic_text": "NUS CS workload, study strategies, and student reactions to heavy module combinations"
+    },
+    {
+      "topic_id": 10,
+      "topic_text": "student anxiety and dissatisfaction with the CS college experience"
+    },
+    {
+      "topic_id": 17,
+      "topic_text": "Students discussing academic self-doubt and stress about grades, especially difficulty achieving high marks in a competitive course with tough bell curve effects."
+    }
+  ],
+  "B": [
+    {
+      "topic_id": 0,
+      "topic_text": "sadness and disappointment about unmet expectations in academics, relationships, and life"
+    }
+  ],
+  "C": [],
+  "D": [
+    {
+      "topic_id": 8,
+      "topic_text": "informal, meme-style social chat with slang, exaggerated spacing, and casual opinions/agreements"
+    },
+    {
+      "topic_id": 15,
+      "topic_text": "informal chat prompts and opinion/discussion questions"
+    },
+    {
+      "topic_id": 5,
+      "topic_text": "relationships, dating, and interpersonal dynamics"
+    },
+    {
+      "topic_id": 2,
+      "topic_text": "Anonymous campus confessions and gossip about students, dorm life, and online group behavior, including AI moderation, appearance-based crushes, self-referential remarks, and complaints about noisy hostel activity."
+    },
+    {
+      "topic_id": 19,
+      "topic_text": "These samples mostly contain casual, playful social-media style text: nonsense/onomatopoeic song-like phrases, compliments or flirtatious remarks, and light personal opinions or reactions."
+    },
+    {
+      "topic_id": 20,
+      "topic_text": "Chaotic, edgy group chat banter: non-CS inclusion, self-deprecating jokes, gambling meme encouragement, and an offhand Nazi-ancestry remark."
+    },
+    {
+      "topic_id": 6,
+      "topic_text": "Casual community coordination and social meetup posts"
+    },
+    {
+      "topic_id": 12,
+      "topic_text": "University students discussing dating and relationship issues on campus, including conflicts with a girlfriend, liking or rejecting someone, and attraction between majors/faculties."
+    },
+    {
+      "topic_id": 9,
+      "topic_text": "Anonymous campus confessions and social chatter about hall safety, rumors, gym behavior, events, and finding people"
+    },
+    {
+      "topic_id": 14,
+      "topic_text": "Informal Singaporean campus/lifestyle confessions and everyday personal opinions"
+    },
+    {
+      "topic_id": 4,
+      "topic_text": "Informal campus/student chat and rants about classes, people, halls, songs, and personal opinions"
+    },
+    {
+      "topic_id": 11,
+      "topic_text": "Discussion of the Russia-Ukraine war centered on Ukraine potentially striking deep into Russian territory with Western long-range missiles, mixed with mocking, pro-Ukraine, and sarcastic commentary about Russian capabilities and shifting control."
+    }
+  ],
+  "E": [
+    {
+      "topic_id": 7,
+      "topic_text": "Students worry about balancing GPA, portfolio, school commitments, startup ambitions, AI\u2019s impact on jobs, and poor career prospects for some majors."
+    },
+    {
+      "topic_id": 16,
+      "topic_text": "university admissions, faculties, and student life"
+    }
+  ],
+  "F": [],
+  "G": [],
+  "H": []
+}
