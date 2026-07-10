@@ -20,19 +20,17 @@ class Layer1:
         self,
         model_dir: str | Path = DEFAULT_MODEL_DIR,
         *,
-        normal_cutoff: float = 0.3,
-        bully_cutoff: float = 0.7,
+        normal_cutoff: float = 0.5,
         max_length: int = 256,
         device: Any | None = None,
     ) -> None:
-        if not 0 <= normal_cutoff <= bully_cutoff <= 1:
-            raise ValueError("Expected 0 <= normal_cutoff <= bully_cutoff <= 1")
+        if not 0 <= normal_cutoff <= 1:
+            raise ValueError("Expected 0 <= normal_cutoff <= 1")
         if max_length <= 0:
             raise ValueError("max_length must be positive")
 
         self.model_dir = self._resolve_model_dir(model_dir)
         self.normal_cutoff = normal_cutoff
-        self.bully_cutoff = bully_cutoff
         self.max_length = max_length
         self._device = device
         self._tokenizer = None
@@ -64,7 +62,7 @@ class Layer1:
         normal_score = float(probs[self.LABEL2ID["normal"]])
         bully_score = float(probs[self.LABEL2ID["bully"]])
         raw_label = self._raw_label(bully_score)
-        status = "not_cyberbully" if bully_score <= self.normal_cutoff else "need_to_investigate"
+        status = "not_cyberbully" if bully_score < self.normal_cutoff else "need_to_investigate"
 
         return {
             "layer": 1,
@@ -87,10 +85,8 @@ class Layer1:
         self._model.eval()
 
     def _raw_label(self, bully_score: float) -> str:
-        if bully_score <= self.normal_cutoff:
+        if bully_score < self.normal_cutoff:
             return "normal"
-        if bully_score >= self.bully_cutoff:
-            return "bully"
         return "uncertain"
 
     @staticmethod
