@@ -1,0 +1,5 @@
+commit=a17f87c4cff7b90b278d12b91ba0614383aaee82
+commit_date=2026-06-13
+source=https://github.com/tdlib/td.git
+runtime_version=1.8.65
+vcpkg_commit=f87344cac03158cbf1467264565f1fd36b382a24

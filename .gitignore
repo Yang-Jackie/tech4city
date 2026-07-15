@@ -218,6 +218,11 @@ tempCodeRunnerFile.py
 # PyPI configuration file
 .pypirc
 
+# Local TDLib development/runtime data
+telegram/.tdlib/
+telegram/.tdlib-build/
+
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
