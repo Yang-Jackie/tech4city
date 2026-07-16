@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Response, status
 
 from .analyzer import Analyzer, analyze_message
+from .config import ConfigurationError, Settings
 from .models import (
-    AnalysisResult,
     HealthResponse,
     MessageCreate,
     MessageIngestResponse,
@@ -14,43 +15,53 @@ from .models import (
     StoredMessage,
     WorkerRunResponse,
 )
-from .worker import InMemoryAnalysisWorker, MessageKey
+from .mongo_repository import MongoRepository
+from .repository import (
+    BackendRepository,
+    InMemoryRepository,
+    MessageConflictError,
+    message_key,
+)
+from .worker import AnalysisWorker
 
 
-def create_app(analyzer: Analyzer = analyze_message) -> FastAPI:
+def create_app(
+    analyzer: Analyzer = analyze_message,
+    repository: BackendRepository | None = None,
+    settings: Settings | None = None,
+) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        active_repository = repository
+        owns_repository = False
+        if active_repository is None:
+            active_settings = settings or Settings.load()
+            active_repository = build_repository(active_settings)
+            owns_repository = True
+
+        await active_repository.initialize()
+        app.state.repository = active_repository
+        app.state.worker = AnalysisWorker(active_repository, analyzer)
+        try:
+            yield
+        finally:
+            if owns_repository:
+                await active_repository.close()
+
     app = FastAPI(
         title="tech4city backend",
-        version="0.2.0",
-        description="Minimal offline skeleton for the system's main API contracts.",
+        version="0.3.0",
+        description="Backend API with injectable memory or MongoDB persistence.",
+        lifespan=lifespan,
     )
-    messages: dict[MessageKey, StoredMessage] = {}
-    analyses: dict[MessageKey, AnalysisResult] = {}
-    worker = InMemoryAnalysisWorker(messages, analyses, analyzer)
-
-    def message_key(message: MessageCreate) -> MessageKey:
-        return (
-            message.telegram_account_id,
-            message.chat_id,
-            message.message_id,
-        )
-
-    def conversation(telegram_account_id: int, chat_id: int) -> list[StoredMessage]:
-        matching = [
-            message
-            for message in messages.values()
-            if message.telegram_account_id == telegram_account_id
-            and message.chat_id == chat_id
-        ]
-        return sorted(
-            matching,
-            key=lambda message: (message.sent_at, message.message_id),
-        )
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
+        active_repository: BackendRepository = app.state.repository
+        await active_repository.ping()
         return HealthResponse(
             status="ok",
-            storage="memory",
+            storage=active_repository.storage_name,
             analyzer="fake-v1",
         )
 
@@ -59,48 +70,40 @@ def create_app(analyzer: Analyzer = analyze_message) -> FastAPI:
         message: MessageCreate,
         response: Response,
     ) -> MessageIngestResponse:
+        active_repository: BackendRepository = app.state.repository
         key = message_key(message)
-        existing = messages.get(key)
+        try:
+            stored, created = await active_repository.ingest_message(message)
+        except MessageConflictError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="message identifier already exists with different content",
+            ) from exc
 
-        if existing is not None:
-            if existing.model_dump(exclude={"received_at"}) != message.model_dump():
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="message identifier already exists with different content",
-                )
-            return MessageIngestResponse(
-                status="duplicate",
-                message=existing,
-                analysis=analyses.get(key),
-                analysis_job=worker.job_for(key),
-            )
-
-        stored = StoredMessage(
-            **message.model_dump(),
-            received_at=datetime.now(UTC),
-        )
-        messages[key] = stored
-        job = worker.enqueue(key)
-        response.status_code = status.HTTP_202_ACCEPTED
+        job = await active_repository.ensure_job(key)
+        analysis = await active_repository.get_latest_analysis(key)
+        if created:
+            response.status_code = status.HTTP_202_ACCEPTED
         return MessageIngestResponse(
-            status="created",
+            status="created" if created else "duplicate",
             message=stored,
-            analysis=None,
+            analysis=analysis,
             analysis_job=job,
         )
 
     @app.post(
-        '/internal/worker/run-once',
+        "/internal/worker/run-once",
         response_model=WorkerRunResponse,
     )
     async def run_worker_once() -> WorkerRunResponse:
+        worker: AnalysisWorker = app.state.worker
         result = await worker.run_once()
         if result is None:
-            return WorkerRunResponse(status='idle')
+            return WorkerRunResponse(status="idle")
 
         job, analysis = result
         return WorkerRunResponse(
-            status='processed',
+            status="processed",
             analysis_job=job,
             analysis=analysis,
         )
@@ -113,7 +116,11 @@ def create_app(analyzer: Analyzer = analyze_message) -> FastAPI:
         chat_id: int,
         telegram_account_id: int = Query(...),
     ) -> list[StoredMessage]:
-        return conversation(telegram_account_id, chat_id)
+        active_repository: BackendRepository = app.state.repository
+        return await active_repository.list_chat_messages(
+            telegram_account_id,
+            chat_id,
+        )
 
     @app.get(
         "/messages/{message_id}/report",
@@ -124,20 +131,35 @@ def create_app(analyzer: Analyzer = analyze_message) -> FastAPI:
         telegram_account_id: int = Query(...),
         chat_id: int = Query(...),
     ) -> MessageReport:
+        active_repository: BackendRepository = app.state.repository
         key = (telegram_account_id, chat_id, message_id)
-        message = messages.get(key)
+        message = await active_repository.get_message(key)
         if message is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="message not found",
             )
+        job = await active_repository.get_job(key)
+        if job is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="analysis job missing",
+            )
         return MessageReport(
             message=message,
-            analysis=analyses.get(key),
-            analysis_job=worker.job_for(key),
+            analysis=await active_repository.get_latest_analysis(key),
+            analysis_job=job,
         )
 
     return app
+
+
+def build_repository(settings: Settings) -> BackendRepository:
+    if settings.storage == "memory":
+        return InMemoryRepository()
+    if settings.mongodb_uri is None:
+        raise ConfigurationError("MONGODB_URI is required for MongoDB storage.")
+    return MongoRepository(settings.mongodb_uri, settings.mongodb_database)
 
 
 app = create_app()

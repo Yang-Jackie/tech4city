@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-# accept sth like 
+# accept sth like
 # {
 #     "telegram_account_id": 100,
 #     "chat_id": 200,
@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 #     "text": "Example message",
 #     "sent_at": "2026-07-13T10:00:00Z"
 # }
+
 
 class MessageCreate(BaseModel):
     """Normalized text message accepted from TDLib gateway."""
@@ -60,7 +61,7 @@ class AnalysisJob(BaseModel):
     telegram_account_id: int
     chat_id: int
     message_id: int
-    status: Literal['pending', 'completed', 'failed']
+    status: Literal["pending", "processing", "completed", "failed"]
     attempts: int = Field(ge=0)
     error: str | None = None
 
@@ -79,7 +80,7 @@ class MessageReport(BaseModel):
 
 
 class WorkerRunResponse(BaseModel):
-    status: Literal['processed', 'idle']
+    status: Literal["processed", "idle"]
     analysis_job: AnalysisJob | None = None
     analysis: AnalysisResult | None = None
 

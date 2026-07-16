@@ -14,13 +14,13 @@ async def analyze_message(
     message: MessageCreate,
     context: list[StoredMessage],
 ) -> AnalysisResult:
-    '''Temporary boundary for the future ML-owned pipeline.'''
+    """Temporary boundary for the future ML-owned pipeline."""
     _ = message, context
     return AnalysisResult(
         harmful=False,
         bully_probability=0,
-        severity='none',
+        severity="none",
         categories=[],
-        explanation='Fake analyzer only; no model evaluation was performed.',
-        pipeline_version='fake-v1',
+        explanation="Fake analyzer only; no model evaluation was performed.",
+        pipeline_version="fake-v1",
     )
