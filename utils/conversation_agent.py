@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
+import networkx as nx
 
 load_dotenv()
 
@@ -15,7 +16,7 @@ client = openai.Client(api_key=os.environ["OPENAI_API_KEY"])
 class MessageItem(BaseModel):
     speaker: str
     text: str
-
+    user_id: int
 
 class ConversationItem(BaseModel):
     scenario: str
@@ -34,7 +35,7 @@ We are creating sample conversations to aid in cyberbullying detection.
 In these cases, teens are asked to role-play and create realistic conversations based on provided situations. 
 There are up to 11 students participating in the conversation. The teens participating are: VCTM, BULLY1, BULLY2, VSUP1, VSUP2, VSUP3, VSUP4, BSUP1, BSUP2, BSUP3, BSUP4 with roles assigned as follows: 
 - VCTM: Victim 
-- BULLY1 and BULLY2: Bully 
+- BULLY1 and BULLY2: Bully 1 and Bully 2 
 - VSUP1, VSUP2, VSUP3 and VSUP4: Victim Support 
 - BSUP1, BSUP2, BSUP3 and BSUP4 : Bully Support. 
 Generate an example conversation, with at most 50 messages, between these students based on the provided message samples and Type of addressed problem. 
@@ -56,7 +57,7 @@ topics = {
 
 
 def build_conversations(
-    kmeans_path, input_path, topic_class_path, output_path, samples_per_topic_id
+    kmeans_path, input_path, topic_class_path, output_path, samples_per_topic_id, num_users, bully_ratio
 ):
     conversation = {
         "A": [],
@@ -88,6 +89,10 @@ def build_conversations(
     for k, v in text_to_topic.items():
         print(k, len(v))
 
+    user_ids = range(num_users)
+    bully_ids = random.sample(user_ids, int(num_users * bully_ratio))
+    G = nx.watts_strogatz_graph(n=num_users, k=10, p=0.4, seed=42)
+
     for topic_id, topic in topics.items():
         topic_kmeans_ids = [
             x["topic_id"] for x in topic_class_data[topic_id]
@@ -98,6 +103,12 @@ def build_conversations(
 
             n = min(5, len(cluster_samples))
             samples = random.sample(cluster_samples, n)
+            bully_chat_ids = random.sample(bully_ids, random.randint(1, 2))
+            groupchat_ids = []
+            for id in bully_chat_ids:
+                groupchat_ids.extend(G.neighbors(id))
+            groupchat_ids = list(set(groupchat_ids))
+            supporter_ids = [x for x in groupchat_ids if x not in bully_chat_ids]
             response = client.responses.parse(
                 model="gpt-4o-mini",
                 input=[
@@ -109,6 +120,9 @@ def build_conversations(
         {"\n".join(samples)}
                     
         Type of problem: {topic},
+
+        Bully id/ids: {bully_chat_ids}
+        Victim ids and supports ids: {supporter_ids}
         """,
                     },
                 ],
@@ -141,13 +155,17 @@ def build_conversations(
 if __name__ == "__main__":
     print("NTU Dataset:")
     SAMPLES_PER_TOPIC_ID = 100 # 10
-    build_conversations(
-        "data/ntu_kmeans.json",
-        "data/ntu_processed.json",
-        "data/ntu_topic_classes.json",
-        "data/ntu_synbullying.json",
-        SAMPLES_PER_TOPIC_ID,
-    )
+    NUM_USERS = 2000 # 100
+    BULLY_RATIO = 0.1
+    # build_conversations(
+    #     "data/ntu_kmeans.json",
+    #     "data/ntu_processed.json",
+    #     "data/ntu_topic_classes.json",
+    #     "data/ntu_synbullying_with_id.json",
+    #     SAMPLES_PER_TOPIC_ID,
+    #     NUM_USERS,
+    #     BULLY_RATIO
+    # )
 
     print("=" * 40)
     print("NUS Dataset:")
@@ -155,6 +173,8 @@ if __name__ == "__main__":
         "data/nus_kmeans.json",
         "data/nus_processed.json",
         "data/nus_topic_classes.json",
-        "data/nus_synbullying.json",
+        "data/nus_synbullying_with_id.json",
         SAMPLES_PER_TOPIC_ID,
+        NUM_USERS,
+        BULLY_RATIO
     )

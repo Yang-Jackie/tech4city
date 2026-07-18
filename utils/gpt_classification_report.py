@@ -12,7 +12,7 @@ client = openai.Client(api_key=os.environ["OPENAI_API_KEY"])
 class BatchClassObject(BaseModel):
     is_bully: list[bool]
 
-def bully_classify(input_file, output_file, guideline_prompt, batch_size=32):
+def bully_classify(input_file, output_file, guideline_prompt, batch_size=5):
     with open(input_file, "r") as f:
         data = json.load(f)
 
@@ -68,20 +68,20 @@ def report_classification(input_file):
         for msg in convo['messages']
     ]
 
-    y_true = [1 if msg['speaker'][0] == 'B' else 0 for msg in all_messages]
+    y_true = [1 if "BULLY" in msg['speaker'] else 0 for msg in all_messages]
     y_pred = [1 if msg['gpt_classification'] else 0 for msg in all_messages]
     
-    print(classification_report(y_true, y_pred, target_names=["Normal", "Bully"]))
+    print(classification_report(y_true, y_pred, target_names=["Normal", "Bully"], digits=4))
     print(confusion_matrix(y_true, y_pred))
 
 if __name__ == "__main__":
     guideline_prompt = "Answer whether this message is harmful or indictive of cyberbullying"
 
-    # bully_classify(
-    #     "data/nus_synbullying_small.json",
-    #     "data/nus_bully_gpt_classify.json",
-    #     guideline_prompt,
-    # )
+    bully_classify(
+        "data/nus_synbullying_small.json",
+        "data/nus_bully_gpt_classify.json",
+        guideline_prompt,
+    )
 
     report_classification(
         "data/nus_bully_gpt_classify.json",

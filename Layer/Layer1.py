@@ -62,7 +62,11 @@ class Layer1:
         normal_score = float(probs[self.LABEL2ID["normal"]])
         bully_score = float(probs[self.LABEL2ID["bully"]])
         raw_label = self._raw_label(bully_score)
-        status = "not_cyberbully" if bully_score < self.normal_cutoff else "need_to_investigate"
+        status = (
+            "not_cyberbully"
+            if bully_score < self.normal_cutoff
+            else "need_to_investigate"
+        )
 
         return {
             "layer": 1,
@@ -122,7 +126,9 @@ class Layer1:
 
             print("loading PEFT/LoRA adapter:", model_dir)
             try:
-                return AutoPeftModelForSequenceClassification.from_pretrained(str(model_dir)).to(device)
+                return AutoPeftModelForSequenceClassification.from_pretrained(
+                    str(model_dir)
+                ).to(device)
             except TypeError as exc:
                 if "unexpected keyword argument" not in str(exc):
                     raise
@@ -132,10 +138,14 @@ class Layer1:
                     device,
                 )
 
-        return AutoModelForSequenceClassification.from_pretrained(str(model_dir)).to(device)
+        return AutoModelForSequenceClassification.from_pretrained(str(model_dir)).to(
+            device
+        )
 
     @staticmethod
-    def _load_peft_adapter_with_compat_config(auto_peft_model_cls: Any, model_dir: Path, device: Any) -> Any:
+    def _load_peft_adapter_with_compat_config(
+        auto_peft_model_cls: Any, model_dir: Path, device: Any
+    ) -> Any:
         from peft import LoraConfig
 
         adapter_config_path = model_dir / "adapter_config.json"
@@ -144,9 +154,7 @@ class Layer1:
 
         allowed_keys = set(inspect.signature(LoraConfig.__init__).parameters)
         compat_config = {
-            key: value
-            for key, value in adapter_config.items()
-            if key in allowed_keys
+            key: value for key, value in adapter_config.items() if key in allowed_keys
         }
         removed_keys = sorted(set(adapter_config) - set(compat_config))
 
@@ -171,7 +179,9 @@ class Layer1:
     @staticmethod
     def _load_tokenizer(model_dir: str | Path) -> Any:
         model_dir = Path(model_dir)
-        if (model_dir / "tokenizer_config.json").exists() or (model_dir / "tokenizer.json").exists():
+        if (model_dir / "tokenizer_config.json").exists() or (
+            model_dir / "tokenizer.json"
+        ).exists():
             return AutoTokenizer.from_pretrained(str(model_dir))
 
         adapter_config_path = model_dir / "adapter_config.json"
@@ -188,7 +198,10 @@ class Layer1:
     @staticmethod
     def _filter_model_inputs(model: Any, encoded: dict[str, Any]) -> dict[str, Any]:
         signature = inspect.signature(model.forward)
-        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+        if any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in signature.parameters.values()
+        ):
             return encoded
         forward_params = set(signature.parameters)
         return {key: value for key, value in encoded.items() if key in forward_params}
