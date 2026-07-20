@@ -5,8 +5,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Response, status
 
-from .analyzer import Analyzer, analyze_message
+from .analyzer import Analyzer, Layer1Analyzer, analyze_message, analyzer_version
 from .config import ConfigurationError, Settings
+from .ingestion import IncomingMessageService
 from .models import (
     HealthResponse,
     MessageCreate,
@@ -20,37 +21,53 @@ from .repository import (
     BackendRepository,
     InMemoryRepository,
     MessageConflictError,
-    message_key,
 )
-from .worker import AnalysisWorker
+from .worker import AnalysisWorker, AnalysisWorkerRunner
 
 
 def create_app(
-    analyzer: Analyzer = analyze_message,
+    analyzer: Analyzer | None = None,
     repository: BackendRepository | None = None,
     settings: Settings | None = None,
+    worker_enabled: bool | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        active_settings = settings or Settings.load()
         active_repository = repository
         owns_repository = False
         if active_repository is None:
-            active_settings = settings or Settings.load()
             active_repository = build_repository(active_settings)
             owns_repository = True
 
         await active_repository.initialize()
+        active_analyzer = analyzer or build_analyzer(active_settings)
+        worker = AnalysisWorker(active_repository, active_analyzer)
+        runner = AnalysisWorkerRunner(worker, active_settings.worker_poll_seconds)
+        should_run_worker = (
+            active_settings.worker_enabled if worker_enabled is None else worker_enabled
+        )
         app.state.repository = active_repository
-        app.state.worker = AnalysisWorker(active_repository, analyzer)
+        app.state.worker = worker
+        app.state.worker_runner = runner
+        app.state.ingestion_service = IncomingMessageService(
+            active_repository,
+            runner.notify if should_run_worker else None,
+        )
+        app.state.analyzer_version = analyzer_version(active_analyzer)
+        if should_run_worker:
+            runner.start()
         try:
             yield
         finally:
+            if should_run_worker:
+                await runner.stop()
             if owns_repository:
                 await active_repository.close()
 
     app = FastAPI(
         title="tech4city backend",
-        version="0.3.0",
+        version="0.4.0",
         description="Backend API with injectable memory or MongoDB persistence.",
         lifespan=lifespan,
     )
@@ -62,7 +79,7 @@ def create_app(
         return HealthResponse(
             status="ok",
             storage=active_repository.storage_name,
-            analyzer="fake-v1",
+            analyzer=app.state.analyzer_version,
         )
 
     @app.post("/messages", response_model=MessageIngestResponse)
@@ -70,25 +87,22 @@ def create_app(
         message: MessageCreate,
         response: Response,
     ) -> MessageIngestResponse:
-        active_repository: BackendRepository = app.state.repository
-        key = message_key(message)
+        service: IncomingMessageService = app.state.ingestion_service
         try:
-            stored, created = await active_repository.ingest_message(message)
+            result = await service.process(message)
         except MessageConflictError as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="message identifier already exists with different content",
             ) from exc
 
-        job = await active_repository.ensure_job(key)
-        analysis = await active_repository.get_latest_analysis(key)
-        if created:
+        if result.created:
             response.status_code = status.HTTP_202_ACCEPTED
         return MessageIngestResponse(
-            status="created" if created else "duplicate",
-            message=stored,
-            analysis=analysis,
-            analysis_job=job,
+            status="created" if result.created else "duplicate",
+            message=result.message,
+            analysis=result.analysis,
+            analysis_job=result.analysis_job,
         )
 
     @app.post(
@@ -160,6 +174,15 @@ def build_repository(settings: Settings) -> BackendRepository:
     if settings.mongodb_uri is None:
         raise ConfigurationError("MONGODB_URI is required for MongoDB storage.")
     return MongoRepository(settings.mongodb_uri, settings.mongodb_database)
+
+
+def build_analyzer(settings: Settings) -> Analyzer:
+    if settings.analyzer == "fake":
+        return analyze_message
+    return Layer1Analyzer(
+        pipeline_version=settings.layer1_pipeline_version,
+        model_dir=settings.layer1_model_dir,
+    )
 
 
 app = create_app()

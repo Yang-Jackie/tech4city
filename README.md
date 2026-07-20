@@ -1,5 +1,11 @@
 # tech4city
 
+## Backend
+
+The backend design is documented in [`ARCHITECTURE.md`](ARCHITECTURE.md), with setup and
+operational instructions in [`backend/README.md`](backend/README.md). Offline mode remains
+lightweight; MongoDB and the local model stack are explicit optional configurations.
+
 ## Run Preprocessing
 
 ```sh

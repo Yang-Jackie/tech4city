@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
+
 from .analyzer import Analyzer
 from .models import AnalysisJob, AnalysisResult
 from .repository import BackendRepository, MessageKey
@@ -40,3 +43,43 @@ class AnalysisWorker:
 
         completed = await self._repository.complete_job(key, analysis)
         return completed, analysis
+
+
+class AnalysisWorkerRunner:
+    """Run queued analysis jobs automatically during the application lifespan."""
+
+    def __init__(self, worker: AnalysisWorker, poll_seconds: float) -> None:
+        self._worker = worker
+        self._poll_seconds = poll_seconds
+        self._wake_event = asyncio.Event()
+        self._stop_event = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+
+    def start(self) -> None:
+        if self._task is not None:
+            raise RuntimeError("analysis worker runner is already started")
+        self._wake_event.set()
+        self._task = asyncio.create_task(self._run(), name="analysis-worker")
+
+    def notify(self) -> None:
+        self._wake_event.set()
+
+    async def stop(self) -> None:
+        if self._task is None:
+            return
+        self._stop_event.set()
+        self._wake_event.set()
+        await self._task
+        self._task = None
+
+    async def _run(self) -> None:
+        while not self._stop_event.is_set():
+            with suppress(TimeoutError):
+                await asyncio.wait_for(
+                    self._wake_event.wait(), timeout=self._poll_seconds
+                )
+            self._wake_event.clear()
+            while not self._stop_event.is_set():
+                result = await self._worker.run_once()
+                if result is None:
+                    break

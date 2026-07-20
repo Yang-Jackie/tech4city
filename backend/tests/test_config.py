@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from app.config import ConfigurationError, Settings
+
+ENVIRONMENT_NAMES = (
+    "TECH4CITY_STORAGE",
+    "MONGODB_URI",
+    "MONGODB_DATABASE",
+    "TECH4CITY_ANALYZER",
+    "TECH4CITY_WORKER_ENABLED",
+    "TECH4CITY_WORKER_POLL_SECONDS",
+    "TECH4CITY_LAYER1_MODEL_DIR",
+    "TECH4CITY_LAYER1_PIPELINE_VERSION",
+)
+MISSING_ENV = Path(__file__).with_name("missing-test.env")
+
+
+def clear_storage_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ENVIRONMENT_NAMES:
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_settings_default_to_offline_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_storage_environment(monkeypatch)
+
+    settings = Settings.load(MISSING_ENV)
+
+    assert settings.storage == "memory"
+    assert settings.mongodb_uri is None
+    assert settings.mongodb_database == "tech4city"
+    assert settings.analyzer == "fake"
+    assert settings.worker_enabled is True
+    assert settings.worker_poll_seconds == 0.25
+    assert settings.layer1_model_dir.is_absolute()
+    assert settings.layer1_pipeline_version == "layer1-roblox-pii-lora-synbullying-v1"
+
+
+def test_mongodb_storage_requires_uri(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_storage_environment(monkeypatch)
+    monkeypatch.setenv("TECH4CITY_STORAGE", "mongodb")
+
+    with pytest.raises(ConfigurationError, match="MONGODB_URI is required"):
+        Settings.load(MISSING_ENV)
+
+
+def test_settings_load_mongodb_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_storage_environment(monkeypatch)
+    monkeypatch.setenv("TECH4CITY_STORAGE", "mongodb")
+    monkeypatch.setenv("MONGODB_URI", "mongodb://database.test:27017/")
+    monkeypatch.setenv("MONGODB_DATABASE", "tech4city_test")
+
+    settings = Settings.load(MISSING_ENV)
+
+    assert settings.storage == "mongodb"
+    assert settings.mongodb_uri == "mongodb://database.test:27017/"
+    assert settings.mongodb_database == "tech4city_test"
+
+
+def test_settings_load_layer1_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_storage_environment(monkeypatch)
+    model_dir = Path("C:/approved-model")
+    monkeypatch.setenv("TECH4CITY_ANALYZER", "layer1")
+    monkeypatch.setenv("TECH4CITY_WORKER_ENABLED", "false")
+    monkeypatch.setenv("TECH4CITY_WORKER_POLL_SECONDS", "1.5")
+    monkeypatch.setenv("TECH4CITY_LAYER1_MODEL_DIR", str(model_dir))
+    monkeypatch.setenv("TECH4CITY_LAYER1_PIPELINE_VERSION", "layer1-test-v2")
+
+    settings = Settings.load(MISSING_ENV)
+
+    assert settings.analyzer == "layer1"
+    assert settings.worker_enabled is False
+    assert settings.worker_poll_seconds == 1.5
+    assert settings.layer1_model_dir == model_dir
+    assert settings.layer1_pipeline_version == "layer1-test-v2"
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "match"),
+    [
+        ("TECH4CITY_ANALYZER", "unsupported", "must be either"),
+        ("TECH4CITY_WORKER_ENABLED", "sometimes", "boolean"),
+        ("TECH4CITY_WORKER_POLL_SECONDS", "0", "greater than zero"),
+    ],
+)
+def test_invalid_runtime_configuration_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    value: str,
+    match: str,
+) -> None:
+    clear_storage_environment(monkeypatch)
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ConfigurationError, match=match):
+        Settings.load(MISSING_ENV)

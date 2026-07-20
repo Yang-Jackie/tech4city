@@ -230,3 +230,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local backend environments and test artifacts
+backend/.venv/
+backend/.pytest_cache/
+backend/pytest-cache-files-*/

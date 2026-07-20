@@ -47,13 +47,23 @@ class StoredMessage(MessageCreate):
     received_at: datetime
 
 
+class Layer1Result(BaseModel):
+    """Unmodified software contract exposed by the local Layer 1 classifier."""
+
+    status: str
+    raw_label: str
+    normal_score: float = Field(ge=0, le=1)
+    bully_score: float = Field(ge=0, le=1)
+
+
 class AnalysisResult(BaseModel):
-    harmful: bool
-    bully_probability: float = Field(ge=0, le=1)
-    severity: Literal["none", "low", "medium", "high", "urgent"]
-    categories: list[str]
-    explanation: str
+    harmful: bool | None = None
+    bully_probability: float | None = Field(default=None, ge=0, le=1)
+    severity: Literal["none", "low", "medium", "high", "urgent"] | None = None
+    categories: list[str] | None = None
+    explanation: str | None = None
     pipeline_version: str
+    layer1: Layer1Result | None = None
 
 
 class AnalysisJob(BaseModel):
