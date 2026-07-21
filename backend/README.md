@@ -142,8 +142,9 @@ The response contract is:
 - `409 Conflict`: the same account/chat/message identity has different immutable content.
 - `422 Unprocessable Entity`: the normalized event is invalid.
 
-The Telegram bridge owns TDLib update normalization, delivery retries, and event ordering.
-Backend authentication and bridge retry/outbox support are not implemented in this demo.
+The Telegram bridge implements TDLib update normalization, ordered delivery, and in-memory
+transient retries. Backend authentication and a durable bridge outbox are not implemented in this
+demo.
 
 ## Layer 1 result contract
 

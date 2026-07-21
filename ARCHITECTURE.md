@@ -33,7 +33,7 @@ Telegram
    |
    | TDLib updateNewMessage (ordered update stream)
    v
-TDLib bridge [friend-owned]
+TDLib bridge [real-time text connector implemented]
    |  filter new text messages
    |  normalize Telegram fields
    |  POST /messages and retry transient delivery failures
@@ -66,7 +66,7 @@ poll the report endpoint to observe `pending`, `processing`, `completed`, or `fa
 
 | Owner | Provides now | Does not currently provide |
 |---|---|---|
-| TDLib bridge developer | Telegram authorization/client lifecycle and the feasibility client. | A finished live-to-backend connector, durable retry/outbox, edits, deletes, or media forwarding. |
+| TDLib bridge developer | Telegram authorization/client lifecycle plus ordered real-time new-text normalization and backend delivery. | A durable outbox, history backfill, edits, deletes, or media forwarding. |
 | Backend | HTTP ingestion, validation, deduplication, storage, job execution, analyzer adapter, conversations, and reports. | API authentication, tenant authorization, production recovery/operations, or frontend UI. |
 | ML owner | Existing Layer 1 artifact and model-behavior decisions. | An approved mapping from raw Layer 1 scores to harmful/severity/category claims. |
 | Frontend developer | Can later consume conversation and report APIs. | Frontend work is intentionally deferred. |
@@ -163,7 +163,8 @@ does not import backend Python or call Layer 1 directly. The bridge preserves TD
 and stable Telegram IDs; the backend owns everything after successful HTTP delivery.
 
 The implemented event scope is new text messages only. Edits, deletions, media, secret chats,
-authentication, and delivery retry/outbox behavior are not part of the current backend contract.
+authentication and a durable delivery outbox are not part of the current backend contract. The
+bridge retries transient failures in memory while its process remains alive.
 
 ## Analysis Pipeline
 
@@ -264,8 +265,9 @@ backup policy, metrics, or CI.
 - Layer 1-shaped ingestion, execution, and persistence are tested through an injected classifier.
 - Live inference with the tracked Layer 1 artifact is not verified because its gated base model
   rejected unauthenticated access.
-- No live TDLib-to-backend end-to-end run exists yet because the bridge connector belongs to the
-  TDLib integration milestone and is not present in the current worktree.
+- The real-time connector is present. A Saved Messages-shaped TDLib update was verified through
+  the bridge HTTP client, FastAPI ingestion, and automatic analysis; a live Telegram-network send
+  remains an explicit operator verification step.
 
 ## Repository Layout
 

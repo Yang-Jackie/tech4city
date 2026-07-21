@@ -16,4 +16,5 @@ python -m utils.preprocess_confessit --input_file data/ntuconfessit.json --outpu
 ## Test TDLib
 
 See [README-TDLIB.md](README-TDLIB.md) for the official-source TDLib build and interactive
-Python user-account smoke tests.
+Python user-account smoke tests. Run `python -m telegram.bridge` to stream new Telegram text
+messages into the backend; the TDLib guide documents the local two-process workflow.

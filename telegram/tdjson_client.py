@@ -7,9 +7,13 @@ import json
 import os
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+UpdateHandler = Callable[[dict[str, Any]], None]
 
 
 class TdlibError(RuntimeError):
@@ -57,6 +61,9 @@ class TdJsonClient:
 
         self._send_condition = threading.Condition()
         self._send_results: dict[int, dict[str, Any]] = {}
+
+        self._update_handlers_lock = threading.Lock()
+        self._update_handlers: list[UpdateHandler] = []
 
         self._receiver = threading.Thread(
             target=self._receive_loop, name="tdlib-receiver", daemon=True
@@ -184,6 +191,18 @@ class TdJsonClient:
         with self._cache_lock:
             return {key: dict(value) for key, value in self.chats.items()}
 
+    def add_update_handler(self, handler: UpdateHandler) -> None:
+        """Subscribe a fast, non-blocking handler to unsolicited TDLib updates."""
+        with self._update_handlers_lock:
+            if handler not in self._update_handlers:
+                self._update_handlers.append(handler)
+
+    def remove_update_handler(self, handler: UpdateHandler) -> None:
+        """Remove a previously registered update handler if it is present."""
+        with self._update_handlers_lock:
+            if handler in self._update_handlers:
+                self._update_handlers.remove(handler)
+
     def _receive_loop(self) -> None:
         while not self._stop.is_set():
             raw = self._td_receive(0.25)
@@ -235,6 +254,16 @@ class TdJsonClient:
             with self._send_condition:
                 self._send_results[event["old_message_id"]] = event
                 self._send_condition.notify_all()
+
+        if isinstance(event_type, str) and event_type.startswith("update"):
+            with self._update_handlers_lock:
+                handlers = tuple(self._update_handlers)
+            for handler in handlers:
+                try:
+                    handler(dict(event))
+                except Exception:
+                    # A consumer must never be able to stop TDLib's receive loop.
+                    print("\nTDLib update handler failed.")
 
     def _update_chat_position(self, event: dict[str, Any]) -> None:
         with self._cache_lock:
