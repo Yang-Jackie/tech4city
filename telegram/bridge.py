@@ -27,13 +27,14 @@ class BridgeConfig:
     request_timeout: float
     initial_backoff: float
     max_backoff: float
+    allowed_chat_ids: frozenset[int]
 
     @classmethod
     def load(cls) -> BridgeConfig:
         return cls(
             backend_url=os.getenv(
                 "TECH4CITY_BACKEND_URL",
-                "http://127.0.0.1:8000",
+                "http://127.0.0.1:8765",
             ).strip(),
             request_timeout=_positive_float(
                 "TECH4CITY_BRIDGE_TIMEOUT_SECONDS",
@@ -47,6 +48,7 @@ class BridgeConfig:
                 "TECH4CITY_BRIDGE_MAX_BACKOFF_SECONDS",
                 default=30.0,
             ),
+            allowed_chat_ids=_chat_id_allowlist("TECH4CITY_BRIDGE_ALLOWED_CHAT_IDS"),
         )
 
 
@@ -58,6 +60,7 @@ class TelegramBackendBridge:
         backend: BackendClient,
         *,
         telegram_account_id: int | None = None,
+        allowed_chat_ids: frozenset[int] | set[int] = frozenset(),
         initial_backoff: float = 0.5,
         max_backoff: float = 30.0,
     ) -> None:
@@ -67,6 +70,7 @@ class TelegramBackendBridge:
             raise ValueError("initial bridge backoff cannot exceed maximum backoff")
         self._backend = backend
         self._telegram_account_id = telegram_account_id
+        self._allowed_chat_ids = frozenset(allowed_chat_ids)
         self._initial_backoff = initial_backoff
         self._max_backoff = max_backoff
         self._updates: queue.Queue[dict[str, Any]] = queue.Queue()
@@ -78,9 +82,18 @@ class TelegramBackendBridge:
         self._telegram_account_id = account_id
 
     def enqueue_update(self, event: dict[str, Any]) -> None:
-        """TDLib-thread callback: copy relevant events and return immediately."""
-        if event.get("@type") == "updateNewMessage":
-            self._updates.put_nowait(dict(event))
+        """Queue only explicitly allowed TDLib new-message events."""
+        if event.get("@type") != "updateNewMessage":
+            return
+        message = event.get("message")
+        chat_id = message.get("chat_id") if isinstance(message, dict) else None
+        if (
+            not isinstance(chat_id, int)
+            or isinstance(chat_id, bool)
+            or chat_id not in self._allowed_chat_ids
+        ):
+            return
+        self._updates.put_nowait(dict(event))
 
     def stop(self) -> None:
         self._stop.set()
@@ -126,8 +139,7 @@ class TelegramBackendBridge:
             else:
                 if response.accepted:
                     print(
-                        f"Delivered message {identity} "
-                        f"(HTTP {response.status_code})."
+                        f"Delivered message {identity} (HTTP {response.status_code})."
                     )
                     return
                 if not response.transient:
@@ -161,6 +173,7 @@ def main() -> int:
 
         bridge = TelegramBackendBridge(
             backend,
+            allowed_chat_ids=bridge_config.allowed_chat_ids,
             initial_backoff=bridge_config.initial_backoff,
             max_backoff=bridge_config.max_backoff,
         )
@@ -172,8 +185,10 @@ def main() -> int:
             me = client.request({"@type": "getMe"})
             bridge.set_telegram_account_id(me["id"])
             print(
-                "Bridge ready. New Telegram text messages will be sent to "
-                f"{backend.base_url}. Press Ctrl+C to stop."
+                "Bridge ready for "
+                f"{len(bridge_config.allowed_chat_ids)} allowed chat(s). "
+                f"Messages will be sent to {backend.base_url}. "
+                "Press Ctrl+C to stop."
             )
             bridge.run_forever()
         return 0
@@ -190,6 +205,26 @@ def main() -> int:
     ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+
+
+def _chat_id_allowlist(name: str) -> frozenset[int]:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        raise ConfigurationError(
+            f"{name} must contain at least one comma-separated Telegram chat ID"
+        )
+    chat_ids: set[int] = set()
+    for raw_chat_id in raw_value.split(","):
+        value = raw_chat_id.strip()
+        if not value:
+            raise ConfigurationError(f"{name} contains an empty chat ID")
+        try:
+            chat_ids.add(int(value))
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"{name} must contain only comma-separated integer chat IDs"
+            ) from exc
+    return frozenset(chat_ids)
 
 
 def _positive_float(name: str, *, default: float) -> float:

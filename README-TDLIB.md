@@ -73,15 +73,15 @@ requires you to type `yes` before it sends anything.
 
 ## Stream new text messages to the backend
 
-The real-time bridge subscribes to TDLib's `updateNewMessage` events, forwards nonblank text
-messages to the backend, and ignores media and other update types. Both incoming and outgoing
-messages are forwarded so the backend can retain both sides of a conversation.
+The real-time bridge subscribes to TDLib's `updateNewMessage` events and forwards nonblank text
+only from explicitly allowlisted chats. It ignores other chats, media, and other update types. Both
+incoming and outgoing messages from an allowed chat are forwarded.
 
 Start FastAPI first in one terminal:
 
 ```powershell
 Set-Location backend
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+uv run uvicorn app.demo:app --host 127.0.0.1 --port 8765
 ```
 
 If `uv` is unavailable, install the backend into the repository virtual environment once and use
@@ -90,7 +90,15 @@ that interpreter:
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e .\backend
 Set-Location backend
-..\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+..\.venv\Scripts\python.exe -m uvicorn app.demo:app --host 127.0.0.1 --port 8765
+```
+
+Before starting the bridge, set an explicit allowlist in the ignored root `.env`. Start with your
+own Saved Messages chat ID, which is normally the same as the account ID returned by `getMe`:
+
+```dotenv
+TECH4CITY_BACKEND_URL=http://127.0.0.1:8765
+TECH4CITY_BRIDGE_ALLOWED_CHAT_IDS=your_saved_messages_chat_id
 ```
 
 Then start the bridge from the repository root in another terminal:
@@ -109,17 +117,21 @@ Delivered message 100:100:123 (HTTP 202).
 The three numbers are the Telegram account, chat, and message IDs. Use them to inspect the report:
 
 ```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/messages/123/report?telegram_account_id=100&chat_id=100"
+Invoke-RestMethod "http://127.0.0.1:8765/messages/123/report?telegram_account_id=100&chat_id=100"
 ```
 
 Configure a different local backend or delivery timing in the ignored `.env`:
 
 ```dotenv
-TECH4CITY_BACKEND_URL=http://127.0.0.1:8000
+TECH4CITY_BACKEND_URL=http://127.0.0.1:8765
+TECH4CITY_BRIDGE_ALLOWED_CHAT_IDS=your_saved_messages_chat_id
 TECH4CITY_BRIDGE_TIMEOUT_SECONDS=10
 TECH4CITY_BRIDGE_INITIAL_BACKOFF_SECONDS=0.5
 TECH4CITY_BRIDGE_MAX_BACKOFF_SECONDS=30
 ```
+
+The allowlist is required and empty means the bridge refuses to start. Chats not listed are never
+queued for backend delivery.
 
 This milestone is real-time only. Transient failures are retried in memory and block later
 deliveries to preserve order, but a bridge process crash can still lose queued updates. A durable

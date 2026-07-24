@@ -4,21 +4,30 @@ import time
 
 from fastapi.testclient import TestClient
 
-from app.analyzer import Layer1Analyzer
-from app.main import create_app
+from app.analyzer import Layer1Analyzer, analyze_message
+from app.main import create_app as create_backend_app
+from app.repository import InMemoryRepository
+
+
+def create_app(**options):
+    options.setdefault("analyzer", analyze_message)
+    options.setdefault("repository", InMemoryRepository())
+    return create_backend_app(**options)
 
 
 def message_payload(
     *,
+    chat_id: int = 200,
     message_id: int = 1,
+    sender_id: int = 300,
     text: str = "A test message",
     sent_at: str = "2026-07-13T10:00:00Z",
 ) -> dict[str, object]:
     return {
         "telegram_account_id": 100,
-        "chat_id": 200,
+        "chat_id": chat_id,
         "message_id": message_id,
-        "sender_id": 300,
+        "sender_id": sender_id,
         "text": text,
         "sent_at": sent_at,
     }
@@ -65,6 +74,61 @@ def test_ingest_and_list_messages_in_chronological_order() -> None:
     assert earlier.json()["analysis_job"]["status"] == "pending"
     assert conversation.status_code == 200
     assert [message["text"] for message in conversation.json()] == ["First", "Second"]
+
+
+def test_list_chats_returns_recent_factual_summaries() -> None:
+    with TestClient(create_app(worker_enabled=False)) as client:
+        client.post(
+            "/messages",
+            json=message_payload(
+                chat_id=201,
+                message_id=1,
+                sender_id=100,
+                text="Earlier chat",
+                sent_at="2026-07-13T10:00:00Z",
+            ),
+        )
+        client.post(
+            "/messages",
+            json=message_payload(
+                chat_id=200,
+                message_id=2,
+                sender_id=100,
+                text="First in recent chat",
+                sent_at="2026-07-13T10:01:00Z",
+            ),
+        )
+        client.post(
+            "/messages",
+            json=message_payload(
+                chat_id=200,
+                message_id=3,
+                sender_id=300,
+                text="Latest sanitized preview",
+                sent_at="2026-07-13T10:02:00Z",
+            ),
+        )
+        response = client.get("/chats", params={"telegram_account_id": 100})
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "chat_id": 200,
+            "message_count": 2,
+            "participant_count": 2,
+            "first_message_at": "2026-07-13T10:01:00Z",
+            "last_message_at": "2026-07-13T10:02:00Z",
+            "last_message_preview": "Latest sanitized preview",
+        },
+        {
+            "chat_id": 201,
+            "message_count": 1,
+            "participant_count": 1,
+            "first_message_at": "2026-07-13T10:00:00Z",
+            "last_message_at": "2026-07-13T10:00:00Z",
+            "last_message_preview": "Earlier chat",
+        },
+    ]
 
 
 def test_duplicate_message_is_idempotent() -> None:

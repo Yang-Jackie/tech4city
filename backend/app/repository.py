@@ -7,7 +7,13 @@ from collections import deque
 from datetime import UTC, datetime
 from typing import Protocol
 
-from .models import AnalysisJob, AnalysisResult, MessageCreate, StoredMessage
+from .models import (
+    AnalysisJob,
+    AnalysisResult,
+    ChatSummary,
+    MessageCreate,
+    StoredMessage,
+)
 
 MessageKey = tuple[int, int, int]
 
@@ -42,6 +48,8 @@ class BackendRepository(Protocol):
     async def fail_job(self, key: MessageKey, error: str) -> AnalysisJob: ...
 
     async def get_message(self, key: MessageKey) -> StoredMessage | None: ...
+
+    async def list_chats(self, telegram_account_id: int) -> list[ChatSummary]: ...
 
     async def list_chat_messages(
         self, telegram_account_id: int, chat_id: int
@@ -152,6 +160,37 @@ class InMemoryRepository:
         async with self._lock:
             message = self._messages.get(key)
             return message.model_copy(deep=True) if message is not None else None
+
+    async def list_chats(self, telegram_account_id: int) -> list[ChatSummary]:
+        async with self._lock:
+            account_messages = [
+                message.model_copy(deep=True)
+                for message in self._messages.values()
+                if message.telegram_account_id == telegram_account_id
+            ]
+
+        grouped: dict[int, list[StoredMessage]] = {}
+        for message in account_messages:
+            grouped.setdefault(message.chat_id, []).append(message)
+
+        summaries: list[ChatSummary] = []
+        for chat_id, messages in grouped.items():
+            ordered = sorted(messages, key=lambda item: (item.sent_at, item.message_id))
+            summaries.append(
+                ChatSummary(
+                    chat_id=chat_id,
+                    message_count=len(ordered),
+                    participant_count=len({item.sender_id for item in ordered}),
+                    first_message_at=ordered[0].sent_at,
+                    last_message_at=ordered[-1].sent_at,
+                    last_message_preview=ordered[-1].text,
+                )
+            )
+        return sorted(
+            summaries,
+            key=lambda item: (item.last_message_at, item.chat_id),
+            reverse=True,
+        )
 
     async def list_chat_messages(
         self, telegram_account_id: int, chat_id: int

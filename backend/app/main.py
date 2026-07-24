@@ -9,6 +9,7 @@ from .analyzer import Analyzer, Layer1Analyzer, analyze_message, analyzer_versio
 from .config import ConfigurationError, Settings
 from .ingestion import IncomingMessageService
 from .models import (
+    ChatSummary,
     HealthResponse,
     MessageCreate,
     MessageIngestResponse,
@@ -121,6 +122,16 @@ def create_app(
             analysis_job=job,
             analysis=analysis,
         )
+
+    @app.get(
+        "/chats",
+        response_model=list[ChatSummary],
+    )
+    async def list_chats(
+        telegram_account_id: int = Query(...),
+    ) -> list[ChatSummary]:
+        active_repository: BackendRepository = app.state.repository
+        return await active_repository.list_chats(telegram_account_id)
 
     @app.get(
         "/chats/{chat_id}/messages",

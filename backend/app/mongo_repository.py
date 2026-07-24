@@ -8,7 +8,13 @@ from typing import Any
 from pymongo import ASCENDING, DESCENDING, AsyncMongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
-from .models import AnalysisJob, AnalysisResult, MessageCreate, StoredMessage
+from .models import (
+    AnalysisJob,
+    AnalysisResult,
+    ChatSummary,
+    MessageCreate,
+    StoredMessage,
+)
 from .repository import (
     MessageConflictError,
     MessageKey,
@@ -178,6 +184,38 @@ class MongoRepository:
     async def get_message(self, key: MessageKey) -> StoredMessage | None:
         document = await self._messages.find_one(key_filter(key))
         return stored_message_from_document(document) if document is not None else None
+
+    async def list_chats(self, telegram_account_id: int) -> list[ChatSummary]:
+        cursor = await self._messages.aggregate(
+            [
+                {"$match": {"telegram_account_id": telegram_account_id}},
+                {"$sort": {"sent_at": 1, "message_id": 1}},
+                {
+                    "$group": {
+                        "_id": "$chat_id",
+                        "message_count": {"$sum": 1},
+                        "sender_ids": {"$addToSet": "$sender_id"},
+                        "first_message_at": {"$first": "$sent_at"},
+                        "last_message_at": {"$last": "$sent_at"},
+                        "last_message_preview": {"$last": "$text"},
+                    }
+                },
+                {
+                    "$project": {
+                        "_id": 0,
+                        "chat_id": "$_id",
+                        "message_count": 1,
+                        "participant_count": {"$size": "$sender_ids"},
+                        "first_message_at": 1,
+                        "last_message_at": 1,
+                        "last_message_preview": 1,
+                    }
+                },
+                {"$sort": {"last_message_at": -1, "chat_id": -1}},
+            ]
+        )
+        documents = await cursor.to_list(length=None)
+        return [ChatSummary.model_validate(document) for document in documents]
 
     async def list_chat_messages(
         self, telegram_account_id: int, chat_id: int

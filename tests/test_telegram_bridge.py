@@ -8,7 +8,8 @@ from io import StringIO
 from unittest.mock import MagicMock, patch
 
 from telegram.backend_client import BackendClient, BackendResponse
-from telegram.bridge import TelegramBackendBridge
+from telegram.bridge import BridgeConfig, TelegramBackendBridge
+from telegram.config import ConfigurationError
 from telegram.normalization import (
     NormalizationError,
     normalize_new_text_message,
@@ -28,8 +29,7 @@ def new_message_update(
             "chat_id": 100,
             "date": 1_700_000_000,
             "is_outgoing": True,
-            "sender_id": sender
-            or {"@type": "messageSenderUser", "user_id": 100},
+            "sender_id": sender or {"@type": "messageSenderUser", "user_id": 100},
             "content": content
             or {
                 "@type": "messageText",
@@ -124,10 +124,32 @@ class BackendClientTests(unittest.TestCase):
         self.assertTrue(result.accepted)
 
 
+class BridgeConfigurationTests(unittest.TestCase):
+    def test_requires_nonempty_chat_allowlist(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesRegex(
+                ConfigurationError,
+                "TECH4CITY_BRIDGE_ALLOWED_CHAT_IDS",
+            ):
+                BridgeConfig.load()
+
+    def test_parses_comma_separated_chat_allowlist(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"TECH4CITY_BRIDGE_ALLOWED_CHAT_IDS": "100, -200,100"},
+            clear=True,
+        ):
+            config = BridgeConfig.load()
+
+        self.assertEqual(config.allowed_chat_ids, frozenset({100, -200}))
+
+
 class BridgeFlowTests(unittest.TestCase):
     def test_saved_messages_update_reaches_backend_client(self) -> None:
         backend = RecordingBackend()
-        bridge = TelegramBackendBridge(backend, telegram_account_id=100)
+        bridge = TelegramBackendBridge(
+            backend, telegram_account_id=100, allowed_chat_ids={100}
+        )
         bridge.enqueue_update(new_message_update())
 
         with redirect_stdout(StringIO()):
@@ -138,12 +160,30 @@ class BridgeFlowTests(unittest.TestCase):
         self.assertEqual(backend.payloads[0]["text"], "bridge test")
         self.assertFalse(bridge.run_once())
 
-    def test_non_text_update_does_not_reach_backend(self) -> None:
+    def test_disallowed_chat_is_not_queued_or_delivered(self) -> None:
+        backend = RecordingBackend()
+        bridge = TelegramBackendBridge(
+            backend, telegram_account_id=100, allowed_chat_ids={200}
+        )
+        bridge.enqueue_update(new_message_update())
+
+        self.assertFalse(bridge.run_once())
+        self.assertEqual(backend.payloads, [])
+
+    def test_default_allowlist_forwards_nothing(self) -> None:
         backend = RecordingBackend()
         bridge = TelegramBackendBridge(backend, telegram_account_id=100)
-        bridge.enqueue_update(
-            new_message_update(content={"@type": "messagePhoto"})
+        bridge.enqueue_update(new_message_update())
+
+        self.assertFalse(bridge.run_once())
+        self.assertEqual(backend.payloads, [])
+
+    def test_non_text_update_does_not_reach_backend(self) -> None:
+        backend = RecordingBackend()
+        bridge = TelegramBackendBridge(
+            backend, telegram_account_id=100, allowed_chat_ids={100}
         )
+        bridge.enqueue_update(new_message_update(content={"@type": "messagePhoto"}))
 
         self.assertTrue(bridge.run_once())
         self.assertEqual(backend.payloads, [])

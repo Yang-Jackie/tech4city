@@ -2,9 +2,9 @@
 
 ## What We Can Offer Now
 
-The backend currently offers a complete, testable path from a normalized Telegram text event to
-a stored analysis result. The TDLib bridge is a separate process owned by the Telegram developer;
-the frontend is deferred. The backend boundary between them is ready to use today.
+The backend accepts normalized Telegram messages, stores analysis results, and serves a multi-chat
+polling demo frontend. The TDLib bridge forwards real-time text messages only from an explicit
+default-deny chat allowlist through the documented HTTP contract.
 
 | Capability | Current status |
 |---|---|
@@ -13,9 +13,9 @@ the frontend is deferred. The backend boundary between them is ready to use toda
 | Persist messages and analysis state | Implemented in memory or MongoDB; authenticated MongoDB restart persistence was tested. |
 | Run analysis after ingestion | Implemented with an automatic in-process worker. |
 | Develop and demo without an ML model | Implemented with the deterministic `fake` analyzer. |
-| Invoke the repository's existing Layer 1 classifier | Software integration implemented; real inference is blocked until gated model access is configured. |
-| Read a conversation and a message's analysis status/result | Implemented through the conversation and report APIs. |
-| Serve a frontend chat interface | Not implemented yet; the read APIs are available for later frontend work. |
+| Invoke the repository's existing Layer 1 classifier | Software integration and local cached-model inference verified; model quality remains ML-owned. |
+| Discover stored chats and read conversation/message analysis | Implemented through chat-summary, conversation, and report APIs. |
+| Serve a frontend chat interface | Implemented as a responsive chat-discovery viewer with a closable analysis drawer at `/demo/` when running `app.demo:app`. |
 | Operate as a secure production service | Not yet; authentication, recovery, retention, observability, and deployment hardening remain. |
 
 ## Scope
@@ -34,7 +34,7 @@ Telegram
    | TDLib updateNewMessage (ordered update stream)
    v
 TDLib bridge [real-time text connector implemented]
-   |  filter new text messages
+   |  allowlist chat IDs, then filter new text messages
    |  normalize Telegram fields
    |  POST /messages and retry transient delivery failures
    v
@@ -55,7 +55,7 @@ MongoDB [optional, implemented] <---- messages + jobs + analysis runs
    |
    | GET conversation / GET message report
    v
-Frontend or API consumer [frontend deferred]
+Demo frontend or API consumer [implemented]
 ```
 
 Important timing behavior: accepting a message and analyzing it are separate. A successful 202
@@ -66,10 +66,10 @@ poll the report endpoint to observe `pending`, `processing`, `completed`, or `fa
 
 | Owner | Provides now | Does not currently provide |
 |---|---|---|
-| TDLib bridge developer | Telegram authorization/client lifecycle plus ordered real-time new-text normalization and backend delivery. | A durable outbox, history backfill, edits, deletes, or media forwarding. |
+| TDLib bridge developer | Telegram authorization/client lifecycle plus default-deny chat isolation, ordered real-time new-text normalization, and backend delivery. | A durable outbox, history backfill, edits, deletes, or media forwarding. |
 | Backend | HTTP ingestion, validation, deduplication, storage, job execution, analyzer adapter, conversations, and reports. | API authentication, tenant authorization, production recovery/operations, or frontend UI. |
 | ML owner | Existing Layer 1 artifact and model-behavior decisions. | An approved mapping from raw Layer 1 scores to harmful/severity/category claims. |
-| Frontend developer | Can later consume conversation and report APIs. | Frontend work is intentionally deferred. |
+| Frontend | Discovers stored chats, shows factual conversation summaries, polls conversation/report APIs, distinguishes sent and received messages, and exposes approved analysis fields in a dismissible drawer. | Login, push updates, production user identity, chat titles from Telegram metadata, or an ML-approved detailed explanation. |
 
 ## Runtime Shape
 
@@ -162,9 +162,10 @@ This HTTP operation is the cross-process equivalent of `processIncomingMessage()
 does not import backend Python or call Layer 1 directly. The bridge preserves TDLib update order
 and stable Telegram IDs; the backend owns everything after successful HTTP delivery.
 
-The implemented event scope is new text messages only. Edits, deletions, media, secret chats,
-authentication and a durable delivery outbox are not part of the current backend contract. The
-bridge retries transient failures in memory while its process remains alive.
+The implemented event scope is new text messages from explicitly allowlisted chat IDs only. An
+empty allowlist prevents bridge startup. Edits, deletions, media, secret chats, authentication, and
+a durable delivery outbox are not part of the current backend contract. The bridge retries
+transient failures in memory while its process remains alive.
 
 ## Analysis Pipeline
 
@@ -188,7 +189,8 @@ Two adapters exist:
 
 - `fake`: deterministic offline behavior for development and tests.
 - `layer1`: lazily loads the existing synchronous classifier, runs inference in a worker thread,
-  and stores raw `status`, `raw_label`, `normal_score`, and `bully_score` fields.
+  and stores raw `status`, `raw_label`,
+ormal_score`, and `bully_score` fields.
 
 Higher-level `harmful`, `severity`, `categories`, and `explanation` values remain null in Layer 1
 mode until the ML owner approves an explicit mapping. The pipeline version and model artifact path
@@ -228,7 +230,7 @@ job completion are not a multi-document transaction. A crash may therefore leave
 
 The conversation endpoint requires `telegram_account_id` as a query parameter. The report endpoint
 requires both `telegram_account_id` and `chat_id`; together with the path `message_id`, these form
-the full Telegram message identity. These parameters identify data but are not authorization—the
+the full Telegram message identity. These parameters identify data but are not authorizationâ€”the
 current API is unauthenticated and must not be exposed publicly.
 
 The existing public fields remain available. Layer 1 data is additive under `analysis.layer1`.
@@ -257,24 +259,35 @@ backup policy, metrics, or CI.
 
 ## Verification Status
 
-- Twenty offline tests pass without MongoDB, network access, or heavyweight model loading.
-- Two opt-in tests passed against a real authenticated MongoDB instance, including persistence
-  through a FastAPI restart.
-- The MongoDB instance used for verification was temporary and was removed afterward; MongoDB is
-  implemented but is not currently running or permanently configured for this repository.
-- Layer 1-shaped ingestion, execution, and persistence are tested through an injected classifier.
-- Live inference with the tracked Layer 1 artifact is not verified because its gated base model
-  rejected unauthenticated access.
-- The real-time connector is present. A Saved Messages-shaped TDLib update was verified through
-  the bridge HTTP client, FastAPI ingestion, and automatic analysis; a live Telegram-network send
-  remains an explicit operator verification step.
+- Twenty-five backend/frontend tests pass offline; two live MongoDB tests remain opt-in and skipped
+  in the default run. Sixteen TDLib/bridge tests pass separately.
+- Two opt-in tests previously passed against an authenticated MongoDB instance, including
+  persistence through a FastAPI restart.
+- Local cached-model Layer 1 inference is verified through message ingestion, automatic job
+  execution, MongoDB persistence, and message reports. This is integration evidence only, not a
+  quality or calibration claim.
+- A synthetic allowlisted `updateNewMessage` traversed the real bridge HTTP client, MongoDB,
+  configured Layer 1 worker, and report API in one attempt. A live Telegram-network send remains an
+  explicit operator verification step.
+- The seed command created four sanitized MongoDB-backed chats and completed all twelve configured
+  Layer 1 jobs.
+- The demo frontend passed live desktop and 390 px mobile verification for chat discovery, factual
+  summaries, message selection, precise scores, analysis drawer close/reopen, mobile back
+  navigation, horizontal overflow, and console errors.
 
 ## Repository Layout
 
 ```text
+frontend/
+|-- index.html
+|-- styles.css
+|-- app.js
+`-- README.md
+
 backend/
 |-- app/
 |   |-- main.py
+|   |-- demo.py
 |   |-- models.py
 |   |-- ingestion.py
 |   |-- repository.py
@@ -300,10 +313,11 @@ backend/
 ## Explicitly Unsupported Today
 
 - Telegram message edits, deletions, media, secret chats, and historical-backfill semantics.
+- Live Telegram-network end-to-end verification of the TDLib bridge.
 - Bridge authentication, durable delivery outbox, and backend-managed bridge retries.
 - User/chat management, API login, per-user access control, and multi-tenant isolation.
 - Automatic recovery of jobs stranded in `processing`, bounded retries, and dead-letter handling.
 - Transactional message/job and result/completion writes or reconciliation after partial failure.
 - Retention/deletion enforcement, backups, production secrets, operational metrics, and CI.
-- A frontend, push notifications, streaming status updates, or WebSocket delivery.
+- Push notifications, streaming status updates, WebSocket delivery, frontend login, and Telegram chat-title metadata.
 - Verified model-quality, safety, accuracy, threshold, or higher-level harmfulness claims.

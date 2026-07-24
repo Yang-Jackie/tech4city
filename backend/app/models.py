@@ -47,6 +47,17 @@ class StoredMessage(MessageCreate):
     received_at: datetime
 
 
+class ChatSummary(BaseModel):
+    """Factual chat metadata derived from stored messages."""
+
+    chat_id: int
+    message_count: int = Field(ge=1)
+    participant_count: int = Field(ge=1)
+    first_message_at: datetime
+    last_message_at: datetime
+    last_message_preview: str
+
+
 class Layer1Result(BaseModel):
     """Unmodified software contract exposed by the local Layer 1 classifier."""
 

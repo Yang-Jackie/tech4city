@@ -6,6 +6,8 @@ persistent messages, jobs, and versioned analysis runs. New jobs run automatical
 either the offline `fake-v1` analyzer or the configured local Layer 1 classifier.
 
 See [`../ARCHITECTURE.md`](../ARCHITECTURE.md) for the backend component and data-flow design.
+Use [`../DEMO.md`](../DEMO.md) as the canonical local startup guide for the frontend,
+sanitized seed data, Layer 1, MongoDB, and the Telegram bridge.
 
 ## Structure
 
@@ -21,7 +23,7 @@ app/mongo_repository.py  # PyMongo async implementation and indexes
 compose.yaml             # Authenticated local MongoDB development service
 ```
 
-## Local MongoDB setup
+## Optional local MongoDB setup
 
 Docker Desktop must be running. From `backend/`:
 
@@ -142,9 +144,9 @@ The response contract is:
 - `409 Conflict`: the same account/chat/message identity has different immutable content.
 - `422 Unprocessable Entity`: the normalized event is invalid.
 
-The Telegram bridge implements TDLib update normalization, ordered delivery, and in-memory
-transient retries. Backend authentication and a durable bridge outbox are not implemented in this
-demo.
+The Telegram bridge requires a non-empty `TECH4CITY_BRIDGE_ALLOWED_CHAT_IDS`, ignores all other
+chats before queueing, and implements ordered delivery with in-memory transient retries. Backend
+authentication and a durable bridge outbox are not implemented in this demo.
 
 ## Layer 1 result contract
 
@@ -158,6 +160,7 @@ In `layer1` mode, reports expose the classifier's `status`, `raw_label`, `normal
 - `GET /health`
 - `POST /messages`
 - `POST /internal/worker/run-once`
+- `GET /chats?telegram_account_id=...`
 - `GET /chats/{chat_id}/messages?telegram_account_id=...`
 - `GET /messages/{message_id}/report?telegram_account_id=...&chat_id=...`
 
