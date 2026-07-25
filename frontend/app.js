@@ -21,6 +21,15 @@ const analysisPanel = document.querySelector("#analysis-panel");
 const analysisContent = document.querySelector("#analysis-content");
 const closeAnalysisButton = document.querySelector("#close-analysis");
 const toast = document.querySelector("#toast");
+const telegramLoginButton = document.querySelector("#telegram-login-button");
+const telegramLoginDialog = document.querySelector("#telegram-login-dialog");
+const telegramLoginForm = document.querySelector("#telegram-login-form");
+const telegramLoginClose = document.querySelector("#telegram-login-close");
+const telegramLoginMessage = document.querySelector("#telegram-login-message");
+const telegramLoginLabel = document.querySelector("#telegram-login-label");
+const telegramLoginValue = document.querySelector("#telegram-login-value");
+const telegramLoginSubmit = document.querySelector("#telegram-login-submit");
+const telegramLogoutButton = document.querySelector("#telegram-logout-button");
 
 const state = {
   accountId: "",
@@ -32,6 +41,9 @@ const state = {
   pollTimer: null,
   refreshing: false,
   toastTimer: null,
+  telegramSessionId: window.localStorage.getItem("tech4cityTelegramSession") || "",
+  telegramStatus: null,
+  telegramPollTimer: null,
 };
 
 function createElement(tagName, className, text) {
@@ -189,8 +201,13 @@ function showChatListError(message) {
 async function loadChats({ initial = false } = {}) {
   if (!state.accountId) return;
   if (initial) showChatListSkeletons();
+  const connected = state.telegramStatus?.status === "ready";
   const query = new URLSearchParams({ telegram_account_id: state.accountId });
-  const chats = await fetchJson(`/chats?${query}`);
+  const chats = await fetchJson(
+    connected
+      ? `/telegram/login/${encodeURIComponent(state.telegramSessionId)}/chats`
+      : `/chats?${query}`,
+  );
   state.chats = chats;
   renderChatList();
 }
@@ -422,9 +439,10 @@ async function loadAnalysis(message, { announceError = true } = {}) {
     chat_id: state.chatId,
   });
   try {
-    const report = await fetchJson(
-      `/messages/${encodeURIComponent(message.message_id)}/report?${query}`,
-    );
+    const connected = state.telegramStatus?.status === "ready";
+    const report = await fetchJson(connected
+      ? `/telegram/login/${encodeURIComponent(state.telegramSessionId)}/messages/${encodeURIComponent(message.message_id)}/report`
+      : `/messages/${encodeURIComponent(message.message_id)}/report?${query}`);
     if (String(message.message_id) === state.selectedMessageId) renderAnalysis(report);
   } catch (error) {
     if (announceError) showToast("Could not load the selected message analysis.");
@@ -452,9 +470,10 @@ async function loadConversation({ initial = false } = {}) {
   if (!state.accountId || !state.chatId) return;
   if (initial) showMessageSkeletons();
   const query = new URLSearchParams({ telegram_account_id: state.accountId });
-  const messages = await fetchJson(
-    `/chats/${encodeURIComponent(state.chatId)}/messages?${query}`,
-  );
+  const connected = state.telegramStatus?.status === "ready";
+  const messages = await fetchJson(connected
+    ? `/telegram/login/${encodeURIComponent(state.telegramSessionId)}/chats/${encodeURIComponent(state.chatId)}/messages`
+    : `/chats/${encodeURIComponent(state.chatId)}/messages?${query}`);
   const previousCount = state.messages.length;
   state.messages = messages;
   renderMessages(messages);
@@ -574,6 +593,128 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !analysisPanel.hidden) closeAnalysisPanel();
 });
 
+async function telegramRequest(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.detail || `Request failed (${response.status})`);
+  return body;
+}
+
+function renderTelegramLogin(login) {
+  state.telegramStatus = login;
+  const status = login.status;
+  const fields = {
+    wait_phone: ["Phone number", "tel", "e.g. +84123456789", "Send code"],
+    wait_code: ["Telegram code", "text", "Enter the code Telegram sent", "Verify code"],
+    wait_password: ["Two-step verification password", "password", login.password_hint || "", "Verify password"],
+  };
+  const field = fields[status];
+  telegramLoginValue.value = "";
+  telegramLoginValue.hidden = !field;
+  telegramLoginLabel.hidden = !field;
+  telegramLoginSubmit.hidden = status === "ready";
+  telegramLogoutButton.hidden = status !== "ready";
+  if (field) {
+    [telegramLoginLabel.textContent, telegramLoginValue.type, telegramLoginValue.placeholder, telegramLoginSubmit.textContent] = field;
+    telegramLoginValue.autocomplete = status === "wait_password" ? "current-password" : "one-time-code";
+    telegramLoginMessage.textContent =
+      status === "wait_phone" ? "Enter the Telegram account phone number in international format." :
+      status === "wait_code" ? "Enter the authentication code. Codes are never stored or logged." :
+      "Telegram requires your two-step verification password. It is sent once and never stored.";
+    telegramLoginValue.focus();
+  } else if (status === "ready") {
+    telegramLoginMessage.textContent = `${login.display_name || "Telegram"} is connected. Only Saved Messages are imported.`;
+    telegramLoginButton.textContent = "Telegram connected";
+    window.localStorage.setItem("tech4cityTelegramSession", login.session_id);
+    loadAccount(
+      String(login.telegram_account_id),
+      String(login.saved_messages_chat_id || login.telegram_account_id),
+    );
+  } else {
+    telegramLoginMessage.textContent = login.error || "Waiting for Telegram…";
+    telegramLoginSubmit.textContent = "Continue";
+  }
+  const active = ["starting", "logging_out"].includes(status);
+  window.clearTimeout(state.telegramPollTimer);
+  if (active) state.telegramPollTimer = window.setTimeout(pollTelegramLogin, 1000);
+}
+
+async function pollTelegramLogin() {
+  if (!state.telegramSessionId) return;
+  try {
+    renderTelegramLogin(await telegramRequest(`/telegram/login/${encodeURIComponent(state.telegramSessionId)}`));
+  } catch (error) {
+    window.localStorage.removeItem("tech4cityTelegramSession");
+    state.telegramSessionId = "";
+    telegramLoginMessage.textContent = error.message;
+    telegramLoginSubmit.hidden = false;
+    telegramLoginSubmit.textContent = "Start login";
+  }
+}
+
+telegramLoginButton.addEventListener("click", () => {
+  telegramLoginDialog.showModal();
+  if (state.telegramSessionId) pollTelegramLogin();
+});
+
+telegramLoginClose.addEventListener("click", () => telegramLoginDialog.close());
+
+telegramLoginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  telegramLoginSubmit.disabled = true;
+  try {
+    let login;
+    if (!state.telegramSessionId) {
+      login = await telegramRequest("/telegram/login", { method: "POST", body: "{}" });
+      state.telegramSessionId = login.session_id;
+      window.localStorage.setItem("tech4cityTelegramSession", login.session_id);
+    } else {
+      const action = {
+        wait_phone: "phone",
+        wait_code: "code",
+        wait_password: "password",
+      }[state.telegramStatus?.status];
+      if (!action) {
+        login = await telegramRequest(`/telegram/login/${encodeURIComponent(state.telegramSessionId)}`);
+      } else {
+        login = await telegramRequest(
+          `/telegram/login/${encodeURIComponent(state.telegramSessionId)}/${action}`,
+          { method: "POST", body: JSON.stringify({ value: telegramLoginValue.value }) },
+        );
+      }
+    }
+    renderTelegramLogin(login);
+  } catch (error) {
+    telegramLoginMessage.textContent = error.message;
+  } finally {
+    telegramLoginValue.value = "";
+    telegramLoginSubmit.disabled = false;
+  }
+});
+
+telegramLogoutButton.addEventListener("click", async () => {
+  telegramLogoutButton.disabled = true;
+  try {
+    await telegramRequest(
+      `/telegram/login/${encodeURIComponent(state.telegramSessionId)}/logout`,
+      { method: "POST", body: "{}" },
+    );
+    window.localStorage.removeItem("tech4cityTelegramSession");
+    state.telegramSessionId = "";
+    state.telegramStatus = null;
+    telegramLoginButton.textContent = "Connect Telegram";
+    telegramLoginDialog.close();
+  } catch (error) {
+    telegramLoginMessage.textContent = error.message;
+  } finally {
+    telegramLogoutButton.disabled = false;
+  }
+});
+
 const initialParams = new URLSearchParams(window.location.search);
 const initialAccountId = initialParams.get("telegram_account_id");
 const initialChatId = initialParams.get("chat_id") || "";
@@ -581,3 +722,4 @@ if (initialAccountId) {
   accountInput.value = initialAccountId;
   loadAccount(initialAccountId, initialChatId);
 }
+if (state.telegramSessionId) pollTelegramLogin();

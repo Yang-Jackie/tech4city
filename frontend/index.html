@@ -37,6 +37,9 @@
         </div>
       </form>
 
+      <button id="telegram-login-button" class="secondary-button" type="button">
+        Connect Telegram
+      </button>
       <div class="connection-state" aria-live="polite">
         <span id="connection-dot" class="state-dot state-dot--idle"></span>
         <span id="connection-status">Enter an account ID</span>
@@ -152,6 +155,27 @@
         </div>
       </div>
     </aside>
+
+    <dialog id="telegram-login-dialog" class="login-dialog">
+      <form id="telegram-login-form" method="dialog">
+        <div class="login-heading">
+          <div>
+            <p class="context-label">Private localhost connection</p>
+            <h2>Connect Telegram</h2>
+          </div>
+          <button id="telegram-login-close" class="icon-button" type="button" aria-label="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+          </button>
+        </div>
+        <p id="telegram-login-message">Start a secure TDLib login. Only Saved Messages will be imported.</p>
+        <label id="telegram-login-label" for="telegram-login-value" hidden></label>
+        <input id="telegram-login-value" autocomplete="off" hidden />
+        <div class="login-actions">
+          <button id="telegram-login-submit" class="primary-button" type="submit">Start login</button>
+          <button id="telegram-logout-button" class="secondary-button" type="button" hidden>Log out</button>
+        </div>
+      </form>
+    </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
   </body>

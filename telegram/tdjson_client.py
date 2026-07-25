@@ -38,6 +38,13 @@ class _PendingRequest:
 class TdJsonClient:
     """Owns one TDLib client and continuously drains its ordered event stream."""
 
+    _clients_lock = threading.Lock()
+    _clients: dict[int, "TdJsonClient"] = {}
+    _pump_lock = threading.Lock()
+    _pump_thread: threading.Thread | None = None
+    _pump_stop: threading.Event | None = None
+    _pump_receive: Any = None
+
     def __init__(self, library_path: Path):
         self.library_path = library_path.resolve()
         self._dll_directory_handles: list[Any] = []
@@ -45,6 +52,8 @@ class TdJsonClient:
         self._configure_functions()
 
         self.client_id = self._td_create_client_id()
+        with self._clients_lock:
+            self._clients[self.client_id] = self
         self._next_request_id = 1
         self._request_lock = threading.Lock()
         self._pending: dict[int, _PendingRequest] = {}
@@ -65,10 +74,7 @@ class TdJsonClient:
         self._update_handlers_lock = threading.Lock()
         self._update_handlers: list[UpdateHandler] = []
 
-        self._receiver = threading.Thread(
-            target=self._receive_loop, name="tdlib-receiver", daemon=True
-        )
-        self._receiver.start()
+        self._ensure_receive_pump()
 
     def _load_library(self, path: Path) -> ctypes.CDLL:
         if not path.is_file():
@@ -203,14 +209,37 @@ class TdJsonClient:
             if handler in self._update_handlers:
                 self._update_handlers.remove(handler)
 
-    def _receive_loop(self) -> None:
-        while not self._stop.is_set():
-            raw = self._td_receive(0.25)
+    def _ensure_receive_pump(self) -> None:
+        """Start the one process-wide thread allowed to call ``td_receive``."""
+        with self._pump_lock:
+            if self._pump_thread is not None and self._pump_thread.is_alive():
+                return
+            type(self)._pump_stop = threading.Event()
+            type(self)._pump_receive = self._td_receive
+            type(self)._pump_thread = threading.Thread(
+                target=type(self)._receive_loop,
+                name="tdlib-receiver",
+                daemon=True,
+            )
+            self._pump_thread.start()
+
+    @classmethod
+    def _receive_loop(cls) -> None:
+        stop = cls._pump_stop
+        receive = cls._pump_receive
+        if stop is None or receive is None:
+            return
+        while not stop.is_set():
+            raw = receive(0.25)
             if not raw:
                 continue
             try:
                 event = json.loads(raw.decode("utf-8"))
-                self._dispatch(event)
+                event_client_id = event.get("@client_id")
+                with cls._clients_lock:
+                    target = cls._clients.get(event_client_id)
+                if target is not None:
+                    target._dispatch(event)
             except Exception as exc:  # Keep receiving; surface diagnostics without secrets.
                 print(f"\nFailed to process a TDLib event: {exc}")
 
@@ -301,7 +330,28 @@ class TdJsonClient:
                     self._state_condition.wait(deadline - time.monotonic())
         finally:
             self._stop.set()
-            self._receiver.join(timeout=2.0)
+            with self._clients_lock:
+                self._clients.pop(self.client_id, None)
+            self._release_receive_pump_if_unused()
+
+    @classmethod
+    def _release_receive_pump_if_unused(cls) -> None:
+        with cls._clients_lock:
+            has_clients = bool(cls._clients)
+        if has_clients:
+            return
+        with cls._pump_lock:
+            thread = cls._pump_thread
+            stop = cls._pump_stop
+            if stop is not None:
+                stop.set()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+        with cls._pump_lock:
+            if cls._pump_thread is thread:
+                cls._pump_thread = None
+                cls._pump_stop = None
+                cls._pump_receive = None
 
     def __enter__(self) -> "TdJsonClient":
         return self

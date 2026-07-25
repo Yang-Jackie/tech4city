@@ -26,6 +26,26 @@ enter the account ID; the seed command uses account `900001` by default.
 
 Memory mode loses its messages when Uvicorn stops. That is expected.
 
+## Connect Telegram from the frontend
+
+The combined app also supports concurrent TDLib user sessions. Keep
+`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TDJSON_PATH`, and
+`TDLIB_DATABASE_ENCRYPTION_KEY` in the ignored root `.env`, start the combined
+app, and select **Connect Telegram**. Complete the phone, code, and optional
+two-step-verification prompts.
+
+Each login has an isolated encrypted TDLib directory under
+`telegram/.tdlib/web`. A local SQLite registry stores only opaque ownership and
+account metadata; authentication codes and passwords are never stored. The
+browser owns sessions through an HttpOnly, SameSite=Strict cookie. Connected
+mode imports up to 100 recent text messages from Saved Messages and then
+accepts only new Saved Messages updates. Its protected read endpoints continue
+using the existing two-second frontend polling.
+
+**Log out** calls Telegram's `logOut`, closes that TDLib client, and removes its
+local session directory. Keep the service bound to `127.0.0.1`; this milestone
+does not provide remote-user application authentication.
+
 ## Run the installed Layer 1
 
 Copy the safe example configuration once:

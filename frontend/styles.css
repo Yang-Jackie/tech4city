@@ -1128,3 +1128,48 @@ input:disabled {
     transition-duration: 0.01ms !important;
   }
 }
+
+.login-dialog {
+  width: min(32rem, calc(100% - 2rem));
+  border: 0;
+  border-radius: 1rem;
+  padding: 1.5rem;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 1.5rem 4rem rgb(15 34 54 / 25%);
+}
+
+.login-dialog::backdrop {
+  background: rgb(15 34 54 / 48%);
+}
+
+.login-dialog form,
+.login-actions {
+  display: grid;
+  gap: 1rem;
+}
+
+.login-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.login-heading h2,
+.login-heading p {
+  margin: 0;
+}
+
+.login-dialog input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  font: inherit;
+}
+
+.login-actions {
+  grid-template-columns: repeat(2, max-content);
+}

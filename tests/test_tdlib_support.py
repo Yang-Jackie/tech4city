@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import unittest
+import threading
+import time
 
 from telegram.formatting import format_message, message_text, partial_phone, user_name
+from telegram.tdjson_client import TdJsonClient
 
 
 class FormattingTests(unittest.TestCase):
@@ -48,6 +51,36 @@ class FormattingTests(unittest.TestCase):
         self.assertNotIn("84123456789", rendered)
 
 
+class ReceivePumpTests(unittest.TestCase):
+    def test_concurrent_clients_share_one_receive_thread(self) -> None:
+        class ReceiveProbe:
+            def __init__(self) -> None:
+                self.thread_ids: set[int] = set()
+
+            def __call__(self, _timeout: float):
+                self.thread_ids.add(threading.get_ident())
+                time.sleep(0.005)
+                return None
+
+        probe = ReceiveProbe()
+        first = TdJsonClient.__new__(TdJsonClient)
+        second = TdJsonClient.__new__(TdJsonClient)
+        first._td_receive = probe
+        second._td_receive = probe
+        with TdJsonClient._clients_lock:
+            TdJsonClient._clients = {1: first, 2: second}
+        try:
+            first._ensure_receive_pump()
+            original_thread = TdJsonClient._pump_thread
+            second._ensure_receive_pump()
+            time.sleep(0.03)
+            self.assertIs(TdJsonClient._pump_thread, original_thread)
+            self.assertEqual(len(probe.thread_ids), 1)
+        finally:
+            with TdJsonClient._clients_lock:
+                TdJsonClient._clients.clear()
+            TdJsonClient._release_receive_pump_if_unused()
+
+
 if __name__ == "__main__":
     unittest.main()
-
