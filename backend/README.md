@@ -148,6 +148,12 @@ The Telegram bridge requires a non-empty `TECH4CITY_BRIDGE_ALLOWED_CHAT_IDS`, ig
 chats before queueing, and implements ordered delivery with in-memory transient retries. Backend
 authentication and a durable bridge outbox are not implemented in this demo.
 
+The combined demo additionally exposes a browser-owned login flow at
+`/telegram/login`. It supports phone, code, and Telegram two-step verification,
+with one isolated TDLib client per concurrent account. Cookie-protected chat
+routes expose Saved Messages only. See `../DEMO.md` for operation and storage
+details.
+
 ## Layer 1 result contract
 
 In `layer1` mode, reports expose the classifier's `status`, `raw_label`, `normal_score`, and

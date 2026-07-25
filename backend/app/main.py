@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query, Response, status
+from fastapi import Cookie, FastAPI, HTTPException, Query, Response, status
 
 from .analyzer import Analyzer, Layer1Analyzer, analyze_message, analyzer_version
 from .config import ConfigurationError, Settings
@@ -23,7 +24,11 @@ from .repository import (
     InMemoryRepository,
     MessageConflictError,
 )
+from .telegram_login import TelegramLoginError, TelegramSessionManager
+from .telegram_models import LoginValue, TelegramLoginStatus, TelegramLogoutStatus
 from .worker import AnalysisWorker, AnalysisWorkerRunner
+
+TelegramManagerFactory = Callable[[Any], Any]
 
 
 def create_app(
@@ -31,6 +36,7 @@ def create_app(
     repository: BackendRepository | None = None,
     settings: Settings | None = None,
     worker_enabled: bool | None = None,
+    telegram_manager_factory: TelegramManagerFactory | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -56,11 +62,14 @@ def create_app(
             runner.notify if should_run_worker else None,
         )
         app.state.analyzer_version = analyzer_version(active_analyzer)
+        manager_factory = telegram_manager_factory or TelegramSessionManager
+        app.state.telegram_manager = manager_factory(app.state.ingestion_service)
         if should_run_worker:
             runner.start()
         try:
             yield
         finally:
+            await app.state.telegram_manager.close()
             if should_run_worker:
                 await runner.stop()
             if owns_repository:
@@ -173,6 +182,225 @@ def create_app(
         return MessageReport(
             message=message,
             analysis=await active_repository.get_latest_analysis(key),
+            analysis_job=job,
+        )
+
+    def require_owner(owner: str | None) -> str:
+        if not owner:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Telegram browser session is missing",
+            )
+        return owner
+
+    async def telegram_action(action: Any) -> Any:
+        try:
+            return await action
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Telegram login session not found",
+            ) from exc
+        except TelegramLoginError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        except (FileNotFoundError, ConfigurationError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
+
+    @app.post(
+        "/telegram/login",
+        response_model=TelegramLoginStatus,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_telegram_login(
+        response: Response,
+        tech4city_owner: str | None = Cookie(default=None),
+    ) -> TelegramLoginStatus:
+        import secrets
+
+        owner = tech4city_owner or secrets.token_urlsafe(32)
+        result = await telegram_action(app.state.telegram_manager.create(owner))
+        if tech4city_owner is None:
+            response.set_cookie(
+                "tech4city_owner",
+                owner,
+                httponly=True,
+                samesite="strict",
+                secure=False,
+                path="/",
+                max_age=60 * 60 * 24 * 30,
+            )
+        response.headers["Cache-Control"] = "no-store"
+        return TelegramLoginStatus(**result)
+
+    @app.get(
+        "/telegram/login/{session_id}",
+        response_model=TelegramLoginStatus,
+    )
+    async def telegram_login_status(
+        session_id: str,
+        response: Response,
+        tech4city_owner: str | None = Cookie(default=None),
+    ) -> TelegramLoginStatus:
+        result = await telegram_action(
+            app.state.telegram_manager.status(
+                session_id, require_owner(tech4city_owner)
+            )
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return TelegramLoginStatus(**result)
+
+    async def submit_telegram_value(
+        session_id: str,
+        owner: str | None,
+        kind: str,
+        body: LoginValue,
+    ) -> TelegramLoginStatus:
+        result = await telegram_action(
+            app.state.telegram_manager.submit(
+                session_id, require_owner(owner), kind, body.value
+            )
+        )
+        return TelegramLoginStatus(**result)
+
+    @app.post(
+        "/telegram/login/{session_id}/phone",
+        response_model=TelegramLoginStatus,
+    )
+    async def submit_telegram_phone(
+        session_id: str,
+        body: LoginValue,
+        response: Response,
+        tech4city_owner: str | None = Cookie(default=None),
+    ) -> TelegramLoginStatus:
+        response.headers["Cache-Control"] = "no-store"
+        return await submit_telegram_value(session_id, tech4city_owner, "phone", body)
+
+    @app.post(
+        "/telegram/login/{session_id}/code",
+        response_model=TelegramLoginStatus,
+    )
+    async def submit_telegram_code(
+        session_id: str,
+        body: LoginValue,
+        response: Response,
+        tech4city_owner: str | None = Cookie(default=None),
+    ) -> TelegramLoginStatus:
+        response.headers["Cache-Control"] = "no-store"
+        return await submit_telegram_value(session_id, tech4city_owner, "code", body)
+
+    @app.post(
+        "/telegram/login/{session_id}/password",
+        response_model=TelegramLoginStatus,
+    )
+    async def submit_telegram_password(
+        session_id: str,
+        body: LoginValue,
+        response: Response,
+        tech4city_owner: str | None = Cookie(default=None),
+    ) -> TelegramLoginStatus:
+        response.headers["Cache-Control"] = "no-store"
+        return await submit_telegram_value(
+            session_id, tech4city_owner, "password", body
+        )
+
+    @app.post(
+        "/telegram/login/{session_id}/logout",
+        response_model=TelegramLogoutStatus,
+    )
+    async def logout_telegram(
+        session_id: str,
+        response: Response,
+        tech4city_owner: str | None = Cookie(default=None),
+    ) -> TelegramLogoutStatus:
+        result = await telegram_action(
+            app.state.telegram_manager.logout(
+                session_id, require_owner(tech4city_owner)
+            )
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return TelegramLogoutStatus(**result)
+
+    async def owned_telegram_account(session_id: str, owner: str | None) -> int:
+        return await telegram_action(
+            app.state.telegram_manager.account_id(session_id, require_owner(owner))
+        )
+
+    @app.get(
+        "/telegram/login/{session_id}/chats",
+        response_model=list[ChatSummary],
+    )
+    async def list_owned_telegram_chats(
+        session_id: str,
+        response: Response,
+        tech4city_owner: str | None = Cookie(default=None),
+    ) -> list[ChatSummary]:
+        account_id = await owned_telegram_account(session_id, tech4city_owner)
+        response.headers["Cache-Control"] = "no-store"
+        return await app.state.repository.list_chats(account_id)
+
+    @app.get(
+        "/telegram/login/{session_id}/chats/{chat_id}/messages",
+        response_model=list[StoredMessage],
+    )
+    async def list_owned_telegram_messages(
+        session_id: str,
+        chat_id: int,
+        response: Response,
+        tech4city_owner: str | None = Cookie(default=None),
+    ) -> list[StoredMessage]:
+        account_id = await owned_telegram_account(session_id, tech4city_owner)
+        saved_chat_id = await telegram_action(
+            app.state.telegram_manager.saved_chat_id(
+                session_id, require_owner(tech4city_owner)
+            )
+        )
+        if chat_id != saved_chat_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only Saved Messages is available",
+            )
+        response.headers["Cache-Control"] = "no-store"
+        return await app.state.repository.list_chat_messages(account_id, chat_id)
+
+    @app.get(
+        "/telegram/login/{session_id}/messages/{message_id}/report",
+        response_model=MessageReport,
+    )
+    async def get_owned_telegram_report(
+        session_id: str,
+        message_id: int,
+        response: Response,
+        tech4city_owner: str | None = Cookie(default=None),
+    ) -> MessageReport:
+        account_id = await owned_telegram_account(session_id, tech4city_owner)
+        saved_chat_id = await telegram_action(
+            app.state.telegram_manager.saved_chat_id(
+                session_id, require_owner(tech4city_owner)
+            )
+        )
+        key = (account_id, saved_chat_id, message_id)
+        message = await app.state.repository.get_message(key)
+        if message is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="message not found",
+            )
+        job = await app.state.repository.get_job(key)
+        if job is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="analysis job missing",
+            )
+        response.headers["Cache-Control"] = "no-store"
+        return MessageReport(
+            message=message,
+            analysis=await app.state.repository.get_latest_analysis(key),
             analysis_job=job,
         )
 
