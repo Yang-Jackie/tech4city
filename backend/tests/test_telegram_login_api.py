@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from app.analyzer import analyze_message
 from app.main import create_app
 from app.models import MessageCreate
@@ -13,6 +14,8 @@ from app.telegram_login import (
     TelegramSessionManager,
 )
 from fastapi.testclient import TestClient
+
+from telegram.tdjson_client import TdlibError
 
 
 class StubTelegramManager:
@@ -88,6 +91,37 @@ def make_app():
         repository=InMemoryRepository(),
         worker_enabled=False,
         telegram_manager_factory=StubTelegramManager,
+    )
+
+
+class RestoredClient:
+    authorization_state = {"@type": "authorizationStateWaitPhoneNumber"}
+    authorization_version = 1
+
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+
+def save_restorable_session(
+    manager: TelegramSessionManager,
+    *,
+    session_id: str = "restored-session",
+    owner_token: str = "owner",
+) -> None:
+    now = datetime.now(UTC)
+    manager._registry.save(
+        ManagedTelegramSession(
+            session_id=session_id,
+            owner_token=owner_token,
+            directory_name="restored-directory",
+            client=RestoredClient(),
+            created_at=now,
+            expires_at=now + timedelta(minutes=15),
+        ),
+        "wait_phone",
     )
 
 
@@ -294,3 +328,141 @@ def test_live_ingestion_is_ordered_and_retries_transient_failures(tmp_path) -> N
     asyncio.run(run())
     assert attempts == 2
     assert [message.text for message in ingested] == ["Retry me"]
+
+
+def test_concurrent_session_restore_opens_one_tdlib_client(tmp_path) -> None:
+    async def run() -> None:
+        manager = TelegramSessionManager(object(), root=tmp_path)
+        save_restorable_session(manager)
+        restored_client = RestoredClient()
+        release = asyncio.Event()
+        open_calls = 0
+
+        async def open_client(*_args):
+            nonlocal open_calls
+            open_calls += 1
+            await release.wait()
+            return restored_client
+
+        manager._open_client = open_client
+        requests = [
+            asyncio.create_task(manager.status("restored-session", "owner"))
+            for _ in range(20)
+        ]
+        await asyncio.sleep(0)
+        with pytest.raises(KeyError):
+            await manager.status("restored-session", "wrong-owner")
+        release.set()
+
+        results = await asyncio.gather(*requests)
+
+        assert open_calls == 1
+        assert all(result == results[0] for result in results)
+        assert manager._restorations == {}
+        await manager.close()
+        assert restored_client.close_calls == 1
+
+    asyncio.run(run())
+
+
+def test_failed_session_restore_is_removed_and_can_retry(tmp_path) -> None:
+    async def run() -> None:
+        manager = TelegramSessionManager(object(), root=tmp_path)
+        save_restorable_session(manager)
+        open_calls = 0
+
+        async def fail_open(*_args):
+            nonlocal open_calls
+            open_calls += 1
+            raise TelegramLoginError("Telegram session could not be restored.")
+
+        manager._open_client = fail_open
+        for _ in range(2):
+            with pytest.raises(
+                TelegramLoginError,
+                match="could not be restored",
+            ):
+                await manager.status("restored-session", "owner")
+            assert manager._restorations == {}
+
+        assert open_calls == 2
+        await manager.close()
+
+    asyncio.run(run())
+
+
+def test_shutdown_waits_for_restore_and_closes_restored_client(tmp_path) -> None:
+    async def run() -> None:
+        manager = TelegramSessionManager(object(), root=tmp_path)
+        save_restorable_session(manager)
+        restored_client = RestoredClient()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def open_client(*_args):
+            started.set()
+            await release.wait()
+            return restored_client
+
+        manager._open_client = open_client
+        restoring = asyncio.create_task(manager.status("restored-session", "owner"))
+        await started.wait()
+        closing = asyncio.create_task(manager.close())
+        await asyncio.sleep(0)
+        release.set()
+
+        with pytest.raises(TelegramLoginError, match="shutting down"):
+            await restoring
+        await closing
+
+        assert restored_client.close_calls == 1
+        assert manager._sessions == {}
+        assert manager._restorations == {}
+        with pytest.raises(TelegramLoginError, match="shutting down"):
+            await manager.status("restored-session", "owner")
+
+    asyncio.run(run())
+
+
+def test_shutdown_waits_for_new_session_creation(tmp_path) -> None:
+    async def run() -> None:
+        manager = TelegramSessionManager(object(), root=tmp_path)
+        restored_client = RestoredClient()
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def open_client(*_args):
+            started.set()
+            await release.wait()
+            return restored_client
+
+        manager._open_client = open_client
+        creating = asyncio.create_task(manager.create("owner"))
+        await started.wait()
+        closing = asyncio.create_task(manager.close())
+        await asyncio.sleep(0)
+        release.set()
+
+        with pytest.raises(TelegramLoginError, match="shutting down"):
+            await creating
+        await closing
+
+        assert restored_client.close_calls == 1
+        assert manager._sessions == {}
+        assert manager._creations == set()
+
+    asyncio.run(run())
+
+
+def test_tdlib_database_lock_error_is_safe_for_browser() -> None:
+    error = TdlibError(
+        {
+            "code": 400,
+            "message": 'Can\'t lock file "private/path/td.binlog"',
+        }
+    )
+
+    message = TelegramSessionManager._safe_tdlib_error(error)
+
+    assert "already open in another application process" in message
+    assert "private/path" not in message

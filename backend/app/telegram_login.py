@@ -76,6 +76,7 @@ class ManagedTelegramSession:
     ingestion_queue: asyncio.Queue[dict[str, Any]] | None = None
     ingestion_task: asyncio.Task[None] | None = None
     ingestion_error: str | None = None
+    closed: bool = False
     action_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     initialization_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -189,9 +190,14 @@ class TelegramSessionManager:
         self._root.mkdir(parents=True, exist_ok=True)
         self._registry = TelegramSessionRegistry(self._root / "sessions.sqlite3")
         self._sessions: dict[str, ManagedTelegramSession] = {}
+        self._restorations: dict[
+            str, tuple[str, asyncio.Task[ManagedTelegramSession]]
+        ] = {}
+        self._creations: set[asyncio.Task[Any]] = set()
         self._lock = asyncio.Lock()
         self._loop = asyncio.get_running_loop()
         self._config: TdlibConfig | None = None
+        self._closing = False
 
     def _load_config(self) -> TdlibConfig:
         if self._config is None:
@@ -199,6 +205,19 @@ class TelegramSessionManager:
         return self._config
 
     async def create(self, owner_token: str) -> dict[str, Any]:
+        current_task = asyncio.current_task()
+        if current_task is None:
+            raise RuntimeError("Telegram session creation requires an asyncio task.")
+        async with self._lock:
+            self._ensure_running()
+            self._creations.add(current_task)
+        try:
+            return await self._create_session(owner_token)
+        finally:
+            async with self._lock:
+                self._creations.discard(current_task)
+
+    async def _create_session(self, owner_token: str) -> dict[str, Any]:
         config = self._load_config()
         session_id = secrets.token_urlsafe(24)
         directory_name = secrets.token_hex(16)
@@ -207,8 +226,7 @@ class TelegramSessionManager:
         database_dir.mkdir(parents=True)
         files_dir.mkdir(parents=True)
         try:
-            client = await asyncio.to_thread(
-                self._start_client,
+            client = await self._open_client(
                 config,
                 session_id,
                 database_dir,
@@ -227,8 +245,16 @@ class TelegramSessionManager:
             expires_at=now + timedelta(minutes=15),
         )
         async with self._lock:
-            self._sessions[session_id] = session
-        self._registry.save(session, self._status_name(session))
+            if self._closing:
+                should_close = True
+            else:
+                should_close = False
+                self._sessions[session_id] = session
+                self._registry.save(session, self._status_name(session))
+        if should_close:
+            await asyncio.to_thread(client.close)
+            shutil.rmtree(database_dir.parent, ignore_errors=True)
+            raise TelegramLoginError("Telegram service is shutting down.")
         return self.describe(session)
 
     async def submit(
@@ -304,24 +330,43 @@ class TelegramSessionManager:
     async def logout(self, session_id: str, owner_token: str) -> dict[str, Any]:
         session = await self._owned(session_id, owner_token)
         async with session.action_lock, session.initialization_lock:
-            await self._stop_live_ingestion(session)
-            with suppress(TdlibError, TdlibTimeout):
-                await asyncio.to_thread(
-                    session.client.request, {"@type": "logOut"}, 20
-                )
-            await asyncio.to_thread(session.client.close)
+            if not session.closed:
+                session.closed = True
+                await self._stop_live_ingestion(session)
+                with suppress(TdlibError, TdlibTimeout):
+                    await asyncio.to_thread(
+                        session.client.request, {"@type": "logOut"}, 20
+                    )
+                await asyncio.to_thread(session.client.close)
             async with self._lock:
-                self._sessions.pop(session_id, None)
-            self._registry.mark_logged_out(session_id)
+                if self._sessions.get(session_id) is session:
+                    self._sessions.pop(session_id, None)
+                self._registry.mark_logged_out(session_id)
             shutil.rmtree(self._root / session.directory_name, ignore_errors=True)
         return {"session_id": session_id, "status": "logged_out"}
 
     async def close(self) -> None:
-        sessions = list(self._sessions.values())
+        async with self._lock:
+            if self._closing:
+                return
+            self._closing = True
+            creations = list(self._creations)
+            restorations = [task for _, task in self._restorations.values()]
+        pending_startups = creations + restorations
+        if pending_startups:
+            await asyncio.gather(*pending_startups, return_exceptions=True)
+        async with self._lock:
+            sessions = list(self._sessions.values())
+            self._sessions.clear()
+            self._creations.clear()
+            self._restorations.clear()
         for session in sessions:
-            await self._stop_live_ingestion(session)
-            await asyncio.to_thread(session.client.close)
-        self._sessions.clear()
+            async with session.action_lock, session.initialization_lock:
+                if session.closed:
+                    continue
+                session.closed = True
+                await self._stop_live_ingestion(session)
+                await asyncio.to_thread(session.client.close)
         self._registry.close()
 
     def describe(self, session: ManagedTelegramSession) -> dict[str, Any]:
@@ -343,41 +388,110 @@ class TelegramSessionManager:
         return result
 
     async def _owned(self, session_id: str, owner_token: str) -> ManagedTelegramSession:
-        session = self._sessions.get(session_id)
-        if session is not None and secrets.compare_digest(
-            session.owner_token, owner_token
-        ):
-            return session
-        saved = self._registry.get_active(session_id, owner_token)
-        if saved is None:
-            raise KeyError(session_id)
-        config = self._load_config()
-        session_root = self._root / saved["directory_name"]
-        client = await asyncio.to_thread(
-            self._start_client,
-            config,
-            session_id,
-            session_root / "database",
-            session_root / "files",
-        )
-        created_at = datetime.fromisoformat(saved["created_at"])
-        session = ManagedTelegramSession(
-            session_id=session_id,
-            owner_token=owner_token,
-            directory_name=saved["directory_name"],
-            client=client,
-            created_at=created_at,
-            expires_at=datetime.now(UTC) + timedelta(minutes=15),
-            telegram_account_id=saved["telegram_account_id"],
-            display_name=saved["display_name"],
-            saved_messages_chat_id=saved["saved_messages_chat_id"],
-        )
         async with self._lock:
-            existing = self._sessions.setdefault(session_id, session)
-        if existing is not session:
-            await asyncio.to_thread(client.close)
-            session = existing
+            self._ensure_running()
+            session = self._sessions.get(session_id)
+            if session is not None:
+                if not secrets.compare_digest(session.owner_token, owner_token):
+                    raise KeyError(session_id)
+                return session
+            restoration = self._restorations.get(session_id)
+            if restoration is None:
+                saved = self._registry.get_active(session_id, owner_token)
+                if saved is None:
+                    raise KeyError(session_id)
+                task = asyncio.create_task(
+                    self._restore_session(session_id, owner_token, saved),
+                    name=f"telegram-session-restore-{session_id}",
+                )
+                restoration = (owner_token, task)
+                self._restorations[session_id] = restoration
+            elif not secrets.compare_digest(restoration[0], owner_token):
+                raise KeyError(session_id)
+        session = await asyncio.shield(restoration[1])
+        if not secrets.compare_digest(session.owner_token, owner_token):
+            raise KeyError(session_id)
         return session
+
+    async def _restore_session(
+        self,
+        session_id: str,
+        owner_token: str,
+        saved: dict[str, Any],
+    ) -> ManagedTelegramSession:
+        current_task = asyncio.current_task()
+        client: TdJsonClient | None = None
+        client_registered = False
+        try:
+            config = self._load_config()
+            session_root = self._root / saved["directory_name"]
+            client = await self._open_client(
+                config,
+                session_id,
+                session_root / "database",
+                session_root / "files",
+            )
+            created_at = datetime.fromisoformat(saved["created_at"])
+            session = ManagedTelegramSession(
+                session_id=session_id,
+                owner_token=owner_token,
+                directory_name=saved["directory_name"],
+                client=client,
+                created_at=created_at,
+                expires_at=datetime.now(UTC) + timedelta(minutes=15),
+                telegram_account_id=saved["telegram_account_id"],
+                display_name=saved["display_name"],
+                saved_messages_chat_id=saved["saved_messages_chat_id"],
+            )
+            async with self._lock:
+                if self._closing:
+                    existing = None
+                    should_close = True
+                else:
+                    existing = self._sessions.get(session_id)
+                    should_close = existing is not None
+                    if existing is None:
+                        self._sessions[session_id] = session
+                        client_registered = True
+            if should_close:
+                await asyncio.to_thread(client.close)
+                client = None
+            if self._closing:
+                raise TelegramLoginError("Telegram service is shutting down.")
+            return existing or session
+        finally:
+            if client is not None and not client_registered:
+                await asyncio.to_thread(client.close)
+            async with self._lock:
+                restoration = self._restorations.get(session_id)
+                if restoration is not None and restoration[1] is current_task:
+                    self._restorations.pop(session_id, None)
+
+    async def _open_client(
+        self,
+        config: TdlibConfig,
+        session_id: str,
+        database_dir: Path,
+        files_dir: Path,
+    ) -> TdJsonClient:
+        try:
+            return await asyncio.to_thread(
+                self._start_client,
+                config,
+                session_id,
+                database_dir,
+                files_dir,
+            )
+        except TdlibError as exc:
+            raise TelegramLoginError(self._safe_tdlib_error(exc)) from exc
+        except TdlibTimeout as exc:
+            raise TelegramLoginError(
+                "Telegram session startup timed out. Please try again."
+            ) from exc
+
+    def _ensure_running(self) -> None:
+        if self._closing:
+            raise TelegramLoginError("Telegram service is shutting down.")
 
     @staticmethod
     def _start_client(
@@ -428,16 +542,12 @@ class TelegramSessionManager:
         async with session.initialization_lock:
             if session.ready_initialized:
                 return
-            me = await asyncio.to_thread(
-                session.client.request, {"@type": "getMe"}, 20
-            )
+            me = await asyncio.to_thread(session.client.request, {"@type": "getMe"}, 20)
             account_id = int(me["id"])
             session.telegram_account_id = account_id
             session.display_name = (
                 " ".join(
-                    part
-                    for part in (me.get("first_name"), me.get("last_name"))
-                    if part
+                    part for part in (me.get("first_name"), me.get("last_name")) if part
                 )
                 or me.get("username")
                 or f"Telegram {account_id}"
@@ -457,9 +567,7 @@ class TelegramSessionManager:
                 session.error = "Could not initialize Saved Messages."
                 raise TelegramLoginError(session.error) from exc
             session.saved_messages_chat_id = int(saved_chat["id"])
-            session.ingestion_queue = asyncio.Queue(
-                maxsize=LIVE_INGESTION_QUEUE_SIZE
-            )
+            session.ingestion_queue = asyncio.Queue(maxsize=LIVE_INGESTION_QUEUE_SIZE)
 
             def on_update(event: dict[str, Any]) -> None:
                 if event.get("@type") != "updateNewMessage":
@@ -580,4 +688,9 @@ class TelegramSessionManager:
     @staticmethod
     def _safe_tdlib_error(exc: TdlibError) -> str:
         safe = str(exc.message).replace("\n", " ").strip()
+        if "can't lock file" in safe.lower():
+            return (
+                "This Telegram session is already open in another application "
+                "process. Stop other tech4city instances and try again."
+            )
         return safe[:240] or "Telegram rejected the request."
