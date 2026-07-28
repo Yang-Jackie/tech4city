@@ -1,16 +1,11 @@
 # Frontend
 
-This folder contains the build-free, read-only conversation review interface:
+Build-free, read-only conversation review interface served by the FastAPI application:
 
 - `index.html` defines chat discovery, conversation, and analysis drawer structure.
 - `styles.css` defines the civic-blue responsive product UI.
-- `app.js` polls chat summaries, messages, and selected-message reports.
+- `app.js` receives live WebSocket notifications and uses REST snapshots, with
+  polling only as a connection fallback.
 
-Start the combined application from `backend/`:
-
-```powershell
-uv run uvicorn app.demo:app --host 127.0.0.1 --port 8765
-```
-
-Open `http://127.0.0.1:8765/`. See [`../DEMO.md`](../DEMO.md) for sanitized seed data,
-Layer 1, MongoDB, and Telegram bridge instructions.
+The frontend has no package installation or build step. See the root
+[`README.md`](../README.md) for setup, startup, optional integrations, and verification.

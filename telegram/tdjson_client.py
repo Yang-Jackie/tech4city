@@ -336,18 +336,18 @@ class TdJsonClient:
 
     @classmethod
     def _release_receive_pump_if_unused(cls) -> None:
-        with cls._clients_lock:
-            has_clients = bool(cls._clients)
-        if has_clients:
-            return
         with cls._pump_lock:
+            with cls._clients_lock:
+                if cls._clients:
+                    return
             thread = cls._pump_thread
             stop = cls._pump_stop
             if stop is not None:
                 stop.set()
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=2.0)
-        with cls._pump_lock:
+            if thread is not None and thread is not threading.current_thread():
+                # Keep the pump lock held so a newly registered client cannot
+                # start or reuse a receiver until the old one has fully stopped.
+                thread.join()
             if cls._pump_thread is thread:
                 cls._pump_thread = None
                 cls._pump_stop = None

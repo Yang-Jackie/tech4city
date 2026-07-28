@@ -109,6 +109,7 @@ def build_conversations(
                 groupchat_ids.extend(G.neighbors(id))
             groupchat_ids = list(set(groupchat_ids))
             supporter_ids = [x for x in groupchat_ids if x not in bully_chat_ids]
+            sample_text = "\n".join(samples)
             response = client.responses.parse(
                 model="gpt-4o-mini",
                 input=[
@@ -117,7 +118,7 @@ def build_conversations(
                         "role": "user",
                         "content": f"""
         Message samples:
-        {"\n".join(samples)}
+        {sample_text}
                     
         Type of problem: {topic},
 

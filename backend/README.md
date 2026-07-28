@@ -6,8 +6,8 @@ persistent messages, jobs, and versioned analysis runs. New jobs run automatical
 either the offline `fake-v1` analyzer or the configured local Layer 1 classifier.
 
 See [`../ARCHITECTURE.md`](../ARCHITECTURE.md) for the backend component and data-flow design.
-Use [`../DEMO.md`](../DEMO.md) as the canonical local startup guide for the frontend,
-sanitized seed data, Layer 1, MongoDB, and the Telegram bridge.
+Use the root [`README.md`](../README.md) for installation, startup, optional MongoDB and Layer 1
+operation, Telegram workflows, and verification.
 
 ## Structure
 
@@ -22,68 +22,6 @@ app/repository.py        # Persistence protocol and in-memory implementation
 app/mongo_repository.py  # PyMongo async implementation and indexes
 compose.yaml             # Authenticated local MongoDB development service
 ```
-
-## Optional local MongoDB setup
-
-Docker Desktop must be running. From `backend/`:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Edit `.env` and replace both password placeholders with the same random URL-safe development
-password. The file is ignored by Git; never commit it.
-
-Start MongoDB and wait for it to become healthy:
-
-```powershell
-docker compose up -d
-docker compose ps
-```
-
-Install the locked backend dependencies and start FastAPI:
-
-```powershell
-uv sync --dev
-uv run uvicorn app.main:app --reload
-```
-
-For the real Layer 1 demo, install the optional ML dependencies and set
-`TECH4CITY_ANALYZER=layer1` in `.env`:
-
-```powershell
-uv sync --dev --extra ml
-uv run uvicorn app.main:app --reload
-```
-
-The tracked artifact is a PEFT adapter whose `Roblox/roblox-pii-classifier` base model is
-gated. Obtain access from its owner and set `HF_TOKEN` only in the ignored `.env` or process
-environment; never commit it. First inference downloads the base model if it is not already
-cached.
-
-The application reads `backend/.env` at startup. Verify MongoDB is active:
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/health
-```
-
-Expected storage field:
-
-```json
-{"status":"ok","storage":"mongodb","analyzer":"fake-v1"}
-```
-
-Open `http://127.0.0.1:8000/docs` to ingest a sanitized test message. Restart only FastAPI,
-then call the conversation or report endpoint again; the message and job should remain.
-
-Stop MongoDB without deleting its data:
-
-```powershell
-docker compose stop
-```
-
-Start it again with `docker compose start`. `docker compose down` removes the container but
-keeps the named volume. `docker compose down -v` permanently deletes the local database.
 
 ## Runtime configuration
 
@@ -151,8 +89,21 @@ authentication and a durable bridge outbox are not implemented in this demo.
 The combined demo additionally exposes a browser-owned login flow at
 `/telegram/login`. It supports phone, code, and Telegram two-step verification,
 with one isolated TDLib client per concurrent account. Cookie-protected chat
-routes expose Saved Messages only. See `../DEMO.md` for operation and storage
-details.
+routes expose Saved Messages only. See the root
+[Telegram frontend guide](../README.md#connect-telegram-from-the-frontend) for operation and
+storage details.
+
+## Live event connection
+
+`GET /ws` upgrades to the single-process WebSocket event channel. Browsers send a `subscribe`
+command for either a demo `account_id` or an owned `telegram_session_id`. The backend emits
+sequenced `telegram.authorization.changed`, `telegram.logged_out`, `chat.updated`,
+`message.created`, and `analysis.updated` events. A bounded connection queue emits
+`resync.required` if a browser falls behind. REST snapshots remain authoritative and the frontend
+uses its previous two-second polling only while WebSocket is unavailable.
+
+This broker is intentionally local to one Uvicorn process. Do not use multiple workers without
+first replacing it with a shared broker such as Redis.
 
 ## Layer 1 result contract
 
@@ -170,22 +121,6 @@ In `layer1` mode, reports expose the classifier's `status`, `raw_label`, `normal
 - `GET /chats/{chat_id}/messages?telegram_account_id=...`
 - `GET /messages/{message_id}/report?telegram_account_id=...&chat_id=...`
 
-## Verify
-
-Offline tests do not require MongoDB:
-
-```powershell
-uv run pytest
-uv run ruff check .
-```
-
-To include the live MongoDB repository test while the Compose service is running:
-
-```powershell
-$env:MONGODB_TEST_URI = (Get-Content .env | Select-String '^MONGODB_URI=').Line.Split('=', 2)[1]
-uv run pytest tests/test_mongo_repository.py -v
-Remove-Item Env:MONGODB_TEST_URI
-```
-
 The fake analyzer remains explicitly synthetic. Layer 1 integration exposes model output but
-does not establish or claim model quality, safety, or accuracy.
+does not establish or claim model quality, safety, or accuracy. See the root
+[verification guide](../README.md#verify) for offline and live MongoDB checks.

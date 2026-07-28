@@ -8,7 +8,7 @@ from sklearn.metrics import classification_report
 import matplotlib.pyplot as plt
 from sentence_transformers import SentenceTransformer
 from node2vec import Node2Vec
-import networx as nx
+import networkx as nx
 
 model = nn.Sequential(
     nn.Linear(768 + 128, 128), nn.Dropout(), nn.ReLU(), nn.Linear(128, 1)

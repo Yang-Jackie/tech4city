@@ -235,3 +235,5 @@ __marimo__/
 backend/.venv/
 backend/.pytest_cache/
 backend/pytest-cache-files-*/
+
+.agents/

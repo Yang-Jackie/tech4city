@@ -1,4 +1,6 @@
 const POLL_INTERVAL_MS = 2000;
+const LOGIN_POLL_INTERVAL_MS = 1000;
+const WS_MAX_RECONNECT_MS = 10000;
 
 const accountForm = document.querySelector("#account-form");
 const accountInput = document.querySelector("#account-id");
@@ -44,6 +46,14 @@ const state = {
   telegramSessionId: window.localStorage.getItem("tech4cityTelegramSession") || "",
   telegramStatus: null,
   telegramPollTimer: null,
+  websocket: null,
+  websocketReconnectTimer: null,
+  websocketReconnectMs: 500,
+  websocketHeartbeatTimer: null,
+  websocketLastPongAt: 0,
+  chatListRequestId: 0,
+  conversationRequestId: 0,
+  analysisRequestId: 0,
 };
 
 function createElement(tagName, className, text) {
@@ -200,16 +210,25 @@ function showChatListError(message) {
 
 async function loadChats({ initial = false } = {}) {
   if (!state.accountId) return;
+  const requestId = ++state.chatListRequestId;
+  const accountId = state.accountId;
   if (initial) showChatListSkeletons();
-  const connected = state.telegramStatus?.status === "ready";
-  const query = new URLSearchParams({ telegram_account_id: state.accountId });
+  const connected = usingConnectedTelegram();
+  const sessionId = state.telegramSessionId;
+  const query = new URLSearchParams({ telegram_account_id: accountId });
   const chats = await fetchJson(
     connected
-      ? `/telegram/login/${encodeURIComponent(state.telegramSessionId)}/chats`
+      ? `/telegram/login/${encodeURIComponent(sessionId)}/chats`
       : `/chats?${query}`,
   );
+  if (
+    requestId !== state.chatListRequestId ||
+    accountId !== state.accountId ||
+    (connected && sessionId !== state.telegramSessionId)
+  ) return false;
   state.chats = chats;
   renderChatList();
+  return true;
 }
 
 function renderConversationSummary(messages) {
@@ -291,6 +310,7 @@ function renderMessages(messages) {
 }
 
 function resetAnalysis() {
+  state.analysisRequestId += 1;
   state.selectedMessageId = null;
   state.selectedButton = null;
   viewAnalysisButton.disabled = true;
@@ -434,17 +454,35 @@ function closeAnalysisPanel({ restoreFocus = true } = {}) {
 }
 
 async function loadAnalysis(message, { announceError = true } = {}) {
+  const requestId = ++state.analysisRequestId;
+  const accountId = state.accountId;
+  const chatId = state.chatId;
+  const selectedMessageId = String(message.message_id);
+  const sessionId = state.telegramSessionId;
+  const connected = usingConnectedTelegram();
   const query = new URLSearchParams({
-    telegram_account_id: state.accountId,
-    chat_id: state.chatId,
+    telegram_account_id: accountId,
+    chat_id: chatId,
   });
   try {
-    const connected = state.telegramStatus?.status === "ready";
     const report = await fetchJson(connected
-      ? `/telegram/login/${encodeURIComponent(state.telegramSessionId)}/messages/${encodeURIComponent(message.message_id)}/report`
+      ? `/telegram/login/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(message.message_id)}/report`
       : `/messages/${encodeURIComponent(message.message_id)}/report?${query}`);
-    if (String(message.message_id) === state.selectedMessageId) renderAnalysis(report);
+    if (
+      requestId === state.analysisRequestId &&
+      accountId === state.accountId &&
+      chatId === state.chatId &&
+      (!connected || sessionId === state.telegramSessionId) &&
+      selectedMessageId === state.selectedMessageId
+    ) renderAnalysis(report);
   } catch (error) {
+    if (
+      requestId !== state.analysisRequestId ||
+      accountId !== state.accountId ||
+      chatId !== state.chatId ||
+      (connected && sessionId !== state.telegramSessionId) ||
+      selectedMessageId !== state.selectedMessageId
+    ) return;
     if (announceError) showToast("Could not load the selected message analysis.");
     const content = createElement("div", "error-state");
     content.append(
@@ -468,12 +506,22 @@ function selectMessage(message, button) {
 
 async function loadConversation({ initial = false } = {}) {
   if (!state.accountId || !state.chatId) return;
+  const requestId = ++state.conversationRequestId;
+  const accountId = state.accountId;
+  const chatId = state.chatId;
+  const sessionId = state.telegramSessionId;
   if (initial) showMessageSkeletons();
-  const query = new URLSearchParams({ telegram_account_id: state.accountId });
-  const connected = state.telegramStatus?.status === "ready";
+  const query = new URLSearchParams({ telegram_account_id: accountId });
+  const connected = usingConnectedTelegram();
   const messages = await fetchJson(connected
-    ? `/telegram/login/${encodeURIComponent(state.telegramSessionId)}/chats/${encodeURIComponent(state.chatId)}/messages`
-    : `/chats/${encodeURIComponent(state.chatId)}/messages?${query}`);
+    ? `/telegram/login/${encodeURIComponent(sessionId)}/chats/${encodeURIComponent(chatId)}/messages`
+    : `/chats/${encodeURIComponent(chatId)}/messages?${query}`);
+  if (
+    requestId !== state.conversationRequestId ||
+    accountId !== state.accountId ||
+    chatId !== state.chatId ||
+    (connected && sessionId !== state.telegramSessionId)
+  ) return false;
   const previousCount = state.messages.length;
   state.messages = messages;
   renderMessages(messages);
@@ -490,6 +538,8 @@ async function loadConversation({ initial = false } = {}) {
 
 async function refreshAll({ initial = false } = {}) {
   if (!state.accountId || state.refreshing) return;
+  const accountId = state.accountId;
+  const chatId = state.chatId;
   state.refreshing = true;
   setConnectionState("loading", "Checking the backend");
   try {
@@ -497,8 +547,10 @@ async function refreshAll({ initial = false } = {}) {
       loadChats({ initial }),
       state.chatId ? loadConversation({ initial }) : Promise.resolve(),
     ]);
+    if (accountId !== state.accountId || chatId !== state.chatId) return;
     setConnectionState("connected", "Backend connected");
   } catch (error) {
+    if (accountId !== state.accountId || chatId !== state.chatId) return;
     setConnectionState("error", "Backend unavailable");
     if (state.chats.length === 0) showChatListError(error.message);
     if (state.chatId && (initial || state.messages.length === 0)) showConversationError(error.message);
@@ -510,6 +562,7 @@ async function refreshAll({ initial = false } = {}) {
 async function selectChat(chatId) {
   const nextChatId = chatId.trim();
   if (!state.accountId || !nextChatId) return;
+  const accountId = state.accountId;
   state.chatId = nextChatId;
   state.messages = [];
   resetAnalysis();
@@ -519,6 +572,7 @@ async function selectChat(chatId) {
   conversationSummary.replaceChildren();
   refreshButton.disabled = false;
   renderChatList();
+  sendWebSocketSubscription();
 
   const url = new URL(window.location.href);
   url.searchParams.set("telegram_account_id", state.accountId);
@@ -528,12 +582,14 @@ async function selectChat(chatId) {
   try {
     await loadConversation({ initial: true });
   } catch (error) {
+    if (accountId !== state.accountId || nextChatId !== state.chatId) return;
     showConversationError(error.message);
   }
 }
 
 async function loadAccount(accountId, preferredChatId = "") {
-  state.accountId = accountId.trim();
+  const nextAccountId = accountId.trim();
+  state.accountId = nextAccountId;
   state.chatId = "";
   state.chats = [];
   state.messages = [];
@@ -547,18 +603,24 @@ async function loadAccount(accountId, preferredChatId = "") {
   url.searchParams.delete("chat_id");
   window.history.replaceState({}, "", url);
 
-  window.clearInterval(state.pollTimer);
+  stopFallbackPolling();
   setConnectionState("loading", "Loading stored chats");
   try {
-    await loadChats({ initial: true });
+    const loaded = await loadChats({ initial: true });
+    if (!loaded || nextAccountId !== state.accountId) return;
     setConnectionState("connected", "Backend connected");
     const firstChatId = preferredChatId || (state.chats[0] ? String(state.chats[0].chat_id) : "");
     if (firstChatId) await selectChat(firstChatId);
   } catch (error) {
+    if (nextAccountId !== state.accountId) return;
     setConnectionState("error", "Backend unavailable");
     showChatListError(error.message);
   }
-  state.pollTimer = window.setInterval(refreshAll, POLL_INTERVAL_MS);
+  sendWebSocketSubscription();
+  updatePollingFallback();
+  if (websocketIsOpen()) {
+    setConnectionState("connected", "Live via WebSocket");
+  }
 }
 
 accountForm.addEventListener("submit", (event) => {
@@ -600,11 +662,190 @@ async function telegramRequest(path, options = {}) {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.detail || `Request failed (${response.status})`);
+  if (!response.ok) {
+    const error = new Error(body.detail || `Request failed (${response.status})`);
+    error.status = response.status;
+    throw error;
+  }
   return body;
 }
 
+function websocketIsOpen() {
+  return state.websocket?.readyState === WebSocket.OPEN;
+}
+
+function usingConnectedTelegram() {
+  return (
+    Boolean(state.telegramSessionId) &&
+    state.telegramStatus?.status === "ready" &&
+    String(state.telegramStatus.telegram_account_id) === state.accountId
+  );
+}
+
+function startFallbackPolling() {
+  if (!state.accountId || state.pollTimer) return;
+  state.pollTimer = window.setInterval(refreshAll, POLL_INTERVAL_MS);
+}
+
+function stopFallbackPolling() {
+  window.clearInterval(state.pollTimer);
+  state.pollTimer = null;
+}
+
+function updatePollingFallback() {
+  if (websocketIsOpen()) stopFallbackPolling();
+  else startFallbackPolling();
+}
+
+function sendWebSocketSubscription() {
+  if (!websocketIsOpen()) return;
+  const command = { type: "subscribe" };
+  if (
+    state.telegramSessionId &&
+    (usingConnectedTelegram() || state.telegramStatus?.status !== "ready")
+  ) {
+    command.telegram_session_id = state.telegramSessionId;
+  } else if (state.accountId) {
+    command.account_id = Number(state.accountId);
+  } else {
+    return;
+  }
+  if (state.chatId) command.chat_id = Number(state.chatId);
+  state.websocket.send(JSON.stringify(command));
+}
+
+function scheduleWebSocketReconnect() {
+  window.clearTimeout(state.websocketReconnectTimer);
+  state.websocketReconnectTimer = window.setTimeout(
+    connectWebSocket,
+    state.websocketReconnectMs,
+  );
+  state.websocketReconnectMs = Math.min(
+    state.websocketReconnectMs * 2,
+    WS_MAX_RECONNECT_MS,
+  );
+}
+
+async function handleWebSocketEvent(event) {
+  if (event.type === "connection.ready") {
+    state.websocketLastPongAt = Date.now();
+    sendWebSocketSubscription();
+    if (state.accountId) await refreshAll();
+    if (state.accountId) {
+      setConnectionState("connected", "Live via WebSocket");
+    }
+    return;
+  }
+  if (event.type === "pong") {
+    state.websocketLastPongAt = Date.now();
+    return;
+  }
+  if (event.type === "subscription.ready") return;
+  if (event.type === "subscription.error") {
+    state.websocket?.close();
+    return;
+  }
+  if (event.type === "resync.required") {
+    if (state.accountId) await refreshAll();
+    if (state.telegramSessionId) await pollTelegramLogin();
+    return;
+  }
+  if (
+    event.type === "telegram.authorization.changed" &&
+    event.telegram_session_id === state.telegramSessionId
+  ) {
+    renderTelegramLogin(event.data);
+    return;
+  }
+  if (
+    event.type === "telegram.logged_out" &&
+    event.telegram_session_id === state.telegramSessionId
+  ) {
+    window.localStorage.removeItem("tech4cityTelegramSession");
+    state.telegramSessionId = "";
+    state.telegramStatus = null;
+    state.chatListRequestId += 1;
+    state.conversationRequestId += 1;
+    state.analysisRequestId += 1;
+    telegramLoginButton.textContent = "Connect Telegram";
+    telegramLoginMessage.textContent = "Telegram was logged out.";
+    telegramLoginSubmit.hidden = false;
+    telegramLoginSubmit.textContent = "Start login";
+    telegramLogoutButton.hidden = true;
+    sendWebSocketSubscription();
+    return;
+  }
+  if (event.account_id !== Number(state.accountId)) return;
+  if (event.type === "message.created") {
+    if (event.chat_id === Number(state.chatId)) await loadConversation();
+    return;
+  }
+  if (event.type === "chat.updated") {
+    await loadChats();
+    return;
+  }
+  if (
+    event.type === "analysis.updated" &&
+    String(event.message_id) === state.selectedMessageId
+  ) {
+    const selected = state.messages.find(
+      (message) => String(message.message_id) === state.selectedMessageId,
+    );
+    if (selected) await loadAnalysis(selected, { announceError: false });
+  }
+  return true;
+}
+
+function connectWebSocket() {
+  if (
+    state.websocket &&
+    [WebSocket.OPEN, WebSocket.CONNECTING].includes(state.websocket.readyState)
+  ) return;
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+  state.websocket = socket;
+  socket.addEventListener("open", () => {
+    state.websocketReconnectMs = 500;
+    state.websocketLastPongAt = Date.now();
+    stopFallbackPolling();
+    window.clearInterval(state.websocketHeartbeatTimer);
+    state.websocketHeartbeatTimer = window.setInterval(() => {
+      if (!websocketIsOpen()) return;
+      if (Date.now() - state.websocketLastPongAt > 60000) {
+        state.websocket.close();
+        return;
+      }
+      state.websocket.send(JSON.stringify({ type: "ping" }));
+    }, 25000);
+  });
+  socket.addEventListener("message", (message) => {
+    try {
+      const event = JSON.parse(message.data);
+      handleWebSocketEvent(event).catch(() => {
+        updatePollingFallback();
+      });
+    } catch {
+      // A malformed event is ignored; REST resynchronization remains available.
+    }
+  });
+  socket.addEventListener("close", () => {
+    window.clearInterval(state.websocketHeartbeatTimer);
+    state.websocketHeartbeatTimer = null;
+    if (state.websocket === socket) state.websocket = null;
+    if (state.accountId) {
+      setConnectionState("loading", "WebSocket reconnecting; polling backend");
+    }
+    updatePollingFallback();
+    scheduleWebSocketReconnect();
+  });
+  socket.addEventListener("error", () => socket.close());
+}
+
 function renderTelegramLogin(login) {
+  const alreadyLoaded =
+    state.telegramStatus?.status === "ready" &&
+    state.telegramStatus.session_id === login.session_id &&
+    state.accountId === String(login.telegram_account_id);
   state.telegramStatus = login;
   const status = login.status;
   const fields = {
@@ -616,8 +857,9 @@ function renderTelegramLogin(login) {
   telegramLoginValue.value = "";
   telegramLoginValue.hidden = !field;
   telegramLoginLabel.hidden = !field;
-  telegramLoginSubmit.hidden = status === "ready";
-  telegramLogoutButton.hidden = status !== "ready";
+  telegramLoginSubmit.hidden = !field;
+  telegramLogoutButton.hidden = status === "logged_out";
+  telegramLogoutButton.textContent = status === "ready" ? "Log out" : "Cancel login";
   if (field) {
     [telegramLoginLabel.textContent, telegramLoginValue.type, telegramLoginValue.placeholder, telegramLoginSubmit.textContent] = field;
     telegramLoginValue.autocomplete = status === "wait_password" ? "current-password" : "one-time-code";
@@ -629,18 +871,32 @@ function renderTelegramLogin(login) {
   } else if (status === "ready") {
     telegramLoginMessage.textContent = `${login.display_name || "Telegram"} is connected. Only Saved Messages are imported.`;
     telegramLoginButton.textContent = "Telegram connected";
+    state.telegramSessionId = login.session_id;
     window.localStorage.setItem("tech4cityTelegramSession", login.session_id);
-    loadAccount(
-      String(login.telegram_account_id),
-      String(login.saved_messages_chat_id || login.telegram_account_id),
-    );
+    if (!alreadyLoaded) {
+      loadAccount(
+        String(login.telegram_account_id),
+        String(login.saved_messages_chat_id || login.telegram_account_id),
+      );
+    }
+  } else if (status === "registration_required") {
+    telegramLoginMessage.textContent =
+      "This phone number does not have a Telegram account. Cancel this login and use an existing account.";
+  } else if (status === "unsupported") {
+    telegramLoginMessage.textContent =
+      "Telegram requires an authorization step this app does not support. Cancel this login and use another sign-in method.";
   } else {
     telegramLoginMessage.textContent = login.error || "Waiting for Telegram…";
     telegramLoginSubmit.textContent = "Continue";
   }
   const active = ["starting", "logging_out"].includes(status);
   window.clearTimeout(state.telegramPollTimer);
-  if (active) state.telegramPollTimer = window.setTimeout(pollTelegramLogin, 1000);
+  if (active && !websocketIsOpen()) {
+    state.telegramPollTimer = window.setTimeout(
+      pollTelegramLogin,
+      LOGIN_POLL_INTERVAL_MS,
+    );
+  }
 }
 
 async function pollTelegramLogin() {
@@ -648,11 +904,24 @@ async function pollTelegramLogin() {
   try {
     renderTelegramLogin(await telegramRequest(`/telegram/login/${encodeURIComponent(state.telegramSessionId)}`));
   } catch (error) {
-    window.localStorage.removeItem("tech4cityTelegramSession");
-    state.telegramSessionId = "";
     telegramLoginMessage.textContent = error.message;
-    telegramLoginSubmit.hidden = false;
-    telegramLoginSubmit.textContent = "Start login";
+    if ([401, 404, 409].includes(error.status)) {
+      window.localStorage.removeItem("tech4cityTelegramSession");
+      state.telegramSessionId = "";
+      state.telegramStatus = null;
+      state.chatListRequestId += 1;
+      state.conversationRequestId += 1;
+      state.analysisRequestId += 1;
+      telegramLogoutButton.hidden = true;
+      telegramLoginSubmit.hidden = false;
+      telegramLoginSubmit.textContent = "Start login";
+    } else {
+      window.clearTimeout(state.telegramPollTimer);
+      state.telegramPollTimer = window.setTimeout(
+        pollTelegramLogin,
+        LOGIN_POLL_INTERVAL_MS,
+      );
+    }
   }
 }
 
@@ -672,6 +941,9 @@ telegramLoginForm.addEventListener("submit", async (event) => {
       login = await telegramRequest("/telegram/login", { method: "POST", body: "{}" });
       state.telegramSessionId = login.session_id;
       window.localStorage.setItem("tech4cityTelegramSession", login.session_id);
+      // The login response may have just set the HttpOnly ownership cookie.
+      // Reconnect so the WebSocket handshake includes that new cookie.
+      if (websocketIsOpen()) state.websocket.close();
     } else {
       const action = {
         wait_phone: "phone",
@@ -706,7 +978,11 @@ telegramLogoutButton.addEventListener("click", async () => {
     window.localStorage.removeItem("tech4cityTelegramSession");
     state.telegramSessionId = "";
     state.telegramStatus = null;
+    state.chatListRequestId += 1;
+    state.conversationRequestId += 1;
+    state.analysisRequestId += 1;
     telegramLoginButton.textContent = "Connect Telegram";
+    sendWebSocketSubscription();
     telegramLoginDialog.close();
   } catch (error) {
     telegramLoginMessage.textContent = error.message;
@@ -723,3 +999,4 @@ if (initialAccountId) {
   loadAccount(initialAccountId, initialChatId);
 }
 if (state.telegramSessionId) pollTelegramLogin();
+connectWebSocket();

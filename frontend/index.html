@@ -8,8 +8,8 @@
       content="Review stored Telegram conversations and inspect available message analysis."
     />
     <title>Conversation review | Tech4City</title>
-    <link rel="stylesheet" href="./styles.css" />
-    <script src="./app.js" defer></script>
+    <link rel="stylesheet" href="./styles.css?v=0.5.1" />
+    <script src="./app.js?v=0.5.1" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#conversation-panel">Skip to conversation</a>
@@ -125,7 +125,7 @@
 
         <footer class="conversation-footer">
           <span class="pulse" aria-hidden="true"></span>
-          This view checks the backend for new messages every two seconds.
+          Live updates use WebSocket, with two-second polling as a fallback.
         </footer>
       </section>
     </main>

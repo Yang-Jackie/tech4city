@@ -3,16 +3,16 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-from fastapi.testclient import TestClient
-
 from app.analyzer import analyze_message
 from app.main import create_app
+from app.models import MessageCreate
 from app.repository import InMemoryRepository
 from app.telegram_login import (
     ManagedTelegramSession,
     TelegramLoginError,
     TelegramSessionManager,
 )
+from fastapi.testclient import TestClient
 
 
 class StubTelegramManager:
@@ -134,6 +134,19 @@ def test_logout_calls_manager_and_returns_terminal_state() -> None:
 
 def test_connected_chat_routes_are_cookie_owned() -> None:
     with TestClient(make_app()) as owner:
+        for chat_id, message_id in ((123, 1), (999, 2)):
+            created = owner.post(
+                "/messages",
+                json={
+                    "telegram_account_id": 123,
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "sender_id": 123,
+                    "text": f"Chat {chat_id}",
+                    "sent_at": "2026-07-28T10:00:00Z",
+                },
+            )
+            assert created.status_code == 202
         owner.post("/telegram/login")
         owner.post("/telegram/login/login-1/phone", json={"value": "+84123"})
         owner.post("/telegram/login/login-1/code", json={"value": "12345"})
@@ -144,7 +157,7 @@ def test_connected_chat_routes_are_cookie_owned() -> None:
             denied = stranger.get("/telegram/login/login-1/chats")
 
     assert owned.status_code == 200
-    assert owned.json() == []
+    assert [chat["chat_id"] for chat in owned.json()] == [123]
     assert denied.status_code == 401
 
 
@@ -160,6 +173,7 @@ def test_ready_initialization_materializes_saved_messages_before_history(
     class FakeClient:
         authorization_state = {"@type": "authorizationStateReady"}
         authorization_version = 1
+        handler = None
 
         def request(self, query, _timeout=30):
             calls.append(query)
@@ -172,8 +186,12 @@ def test_ready_initialization_materializes_saved_messages_before_history(
                 return {"messages": []}
             raise AssertionError(query)
 
-        def add_update_handler(self, _handler):
-            pass
+        def add_update_handler(self, handler):
+            self.handler = handler
+
+        def remove_update_handler(self, handler):
+            assert self.handler is handler
+            self.handler = None
 
     async def run() -> None:
         manager = TelegramSessionManager(FakeIngestion(), root=tmp_path)
@@ -187,6 +205,7 @@ def test_ready_initialization_materializes_saved_messages_before_history(
             expires_at=now + timedelta(minutes=15),
         )
         await manager._initialize_ready(session)
+        await manager._stop_live_ingestion(session)
         manager._registry.close()
         assert session.saved_messages_chat_id == 999
 
@@ -196,3 +215,82 @@ def test_ready_initialization_materializes_saved_messages_before_history(
         "createPrivateChat",
         "getChatHistory",
     ]
+
+
+def test_live_ingestion_is_ordered_and_retries_transient_failures(tmp_path) -> None:
+    attempts = 0
+    ingested: list[MessageCreate] = []
+    completed: asyncio.Event | None = None
+
+    class FakeIngestion:
+        async def process(self, message):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("temporary storage failure")
+            ingested.append(message)
+            assert completed is not None
+            completed.set()
+
+    class FakeClient:
+        authorization_state = {"@type": "authorizationStateReady"}
+        authorization_version = 1
+        handler = None
+
+        def request(self, query, _timeout=30):
+            if query["@type"] == "getMe":
+                return {"id": 123, "first_name": "Test", "last_name": "User"}
+            if query["@type"] == "createPrivateChat":
+                return {"id": 999}
+            if query["@type"] == "getChatHistory":
+                return {"messages": []}
+            raise AssertionError(query)
+
+        def add_update_handler(self, handler):
+            self.handler = handler
+
+        def remove_update_handler(self, handler):
+            assert self.handler is handler
+            self.handler = None
+
+    async def run() -> None:
+        nonlocal completed
+        completed = asyncio.Event()
+        manager = TelegramSessionManager(FakeIngestion(), root=tmp_path)
+        now = datetime.now(UTC)
+        client = FakeClient()
+        session = ManagedTelegramSession(
+            session_id="session",
+            owner_token="owner",
+            directory_name="directory",
+            client=client,
+            created_at=now,
+            expires_at=now + timedelta(minutes=15),
+        )
+        await manager._initialize_ready(session)
+        assert client.handler is not None
+        client.handler(
+            {
+                "@type": "updateNewMessage",
+                "message": {
+                    "id": 10,
+                    "chat_id": 999,
+                    "date": 1_753_697_600,
+                    "sender_id": {
+                        "@type": "messageSenderUser",
+                        "user_id": 123,
+                    },
+                    "content": {
+                        "@type": "messageText",
+                        "text": {"text": "Retry me"},
+                    },
+                },
+            }
+        )
+        await asyncio.wait_for(completed.wait(), timeout=2)
+        await manager._stop_live_ingestion(session)
+        manager._registry.close()
+
+    asyncio.run(run())
+    assert attempts == 2
+    assert [message.text for message in ingested] == ["Retry me"]

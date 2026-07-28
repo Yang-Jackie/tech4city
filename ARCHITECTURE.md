@@ -3,7 +3,7 @@
 ## What We Can Offer Now
 
 The backend accepts normalized Telegram messages, stores analysis results, and serves a multi-chat
-polling demo frontend. The TDLib bridge forwards real-time text messages only from an explicit
+WebSocket-enabled demo frontend. The TDLib bridge forwards real-time text messages only from an explicit
 default-deny chat allowlist through the documented HTTP contract.
 
 | Capability | Current status |
@@ -69,7 +69,7 @@ poll the report endpoint to observe `pending`, `processing`, `completed`, or `fa
 | TDLib bridge developer | Telegram authorization/client lifecycle plus default-deny chat isolation, ordered real-time new-text normalization, and backend delivery. | A durable outbox, history backfill, edits, deletes, or media forwarding. |
 | Backend | HTTP ingestion, validation, deduplication, storage, job execution, analyzer adapter, conversations, and reports. | API authentication, tenant authorization, production recovery/operations, or frontend UI. |
 | ML owner | Existing Layer 1 artifact and model-behavior decisions. | An approved mapping from raw Layer 1 scores to harmful/severity/category claims. |
-| Frontend | Discovers stored chats, shows factual conversation summaries, polls conversation/report APIs, distinguishes sent and received messages, and exposes approved analysis fields in a dismissible drawer. | Login, push updates, production user identity, chat titles from Telegram metadata, or an ML-approved detailed explanation. |
+| Frontend | Discovers stored chats, shows factual conversation summaries, receives WebSocket updates with REST snapshot recovery, distinguishes sent and received messages, and exposes approved analysis fields in a dismissible drawer. | Production user identity, chat titles from Telegram metadata, or an ML-approved detailed explanation. |
 
 ## Runtime Shape
 
@@ -235,72 +235,17 @@ current API is unauthenticated and must not be exposed publicly.
 
 The existing public fields remain available. Layer 1 data is additive under `analysis.layer1`.
 
-## Configuration and Deployment Modes
+## Runtime Modes
 
-```text
-Storage:   TECH4CITY_STORAGE=memory | mongodb
-Analyzer:  TECH4CITY_ANALYZER=fake | layer1
-Worker:    TECH4CITY_WORKER_ENABLED=true | false
-```
-
-Memory plus fake analysis is the default offline mode. MongoDB provides persistence across backend
-restarts. Layer 1 is an optional dependency extra and requires the approved local artifact, its
-gated base-model access through `HF_TOKEN`, and an explicit pipeline version.
-
-The entries in `backend/.env.example` document these selectable integration contracts. They do not
-contain working secrets and are not all required in every mode. `MONGODB_URI` is required only for
-MongoDB mode, and `HF_TOKEN` is required only when the chosen Layer 1 dependency needs gated model
-access. A developer creates an ignored `backend/.env` with real local values; none is currently
-committed or provisioned as a permanent deployment.
+Storage, analysis, and worker implementations are selectable adapters. Memory plus fake analysis
+is the default offline shape; MongoDB provides restart persistence; Layer 1 replaces the analyzer
+through the same worker contract. See the [backend reference](backend/README.md#runtime-configuration)
+for the exact configuration surface and the root [operational guide](README.md#optional-integrations)
+for setup.
 
 The current deployment is a development modular monolith. It has no API authentication, tenant
 authorization, bounded retention, retry policy, processing lease, production secret management,
 backup policy, metrics, or CI.
-
-## Verification Status
-
-- Twenty-five backend/frontend tests pass offline; two live MongoDB tests remain opt-in and skipped
-  in the default run. Sixteen TDLib/bridge tests pass separately.
-- Two opt-in tests previously passed against an authenticated MongoDB instance, including
-  persistence through a FastAPI restart.
-- Local cached-model Layer 1 inference is verified through message ingestion, automatic job
-  execution, MongoDB persistence, and message reports. This is integration evidence only, not a
-  quality or calibration claim.
-- A synthetic allowlisted `updateNewMessage` traversed the real bridge HTTP client, MongoDB,
-  configured Layer 1 worker, and report API in one attempt. A live Telegram-network send remains an
-  explicit operator verification step.
-- The seed command created four sanitized MongoDB-backed chats and completed all twelve configured
-  Layer 1 jobs.
-- The demo frontend passed live desktop and 390 px mobile verification for chat discovery, factual
-  summaries, message selection, precise scores, analysis drawer close/reopen, mobile back
-  navigation, horizontal overflow, and console errors.
-
-## Repository Layout
-
-```text
-frontend/
-|-- index.html
-|-- styles.css
-|-- app.js
-`-- README.md
-
-backend/
-|-- app/
-|   |-- main.py
-|   |-- demo.py
-|   |-- models.py
-|   |-- ingestion.py
-|   |-- repository.py
-|   |-- mongo_repository.py
-|   |-- worker.py
-|   |-- analyzer.py
-|   `-- config.py
-|-- tests/
-|-- compose.yaml
-|-- pyproject.toml
-|-- uv.lock
-`-- README.md
-```
 
 ## Next Backend Priorities
 
@@ -315,9 +260,12 @@ backend/
 - Telegram message edits, deletions, media, secret chats, and historical-backfill semantics.
 - Live Telegram-network end-to-end verification of the TDLib bridge.
 - Bridge authentication, durable delivery outbox, and backend-managed bridge retries.
-- User/chat management, API login, per-user access control, and multi-tenant isolation.
+- Remote-user application login, tenant management, and multi-tenant isolation. Local Telegram
+  sessions are scoped by an HttpOnly browser-ownership cookie.
 - Automatic recovery of jobs stranded in `processing`, bounded retries, and dead-letter handling.
 - Transactional message/job and result/completion writes or reconciliation after partial failure.
 - Retention/deletion enforcement, backups, production secrets, operational metrics, and CI.
-- Push notifications, streaming status updates, WebSocket delivery, frontend login, and Telegram chat-title metadata.
+- Shared multi-worker WebSocket delivery, durable event replay, push notifications, and Telegram
+  chat-title metadata. The current WebSocket broker is single-process and reconnects through REST
+  snapshot recovery.
 - Verified model-quality, safety, accuracy, threshold, or higher-level harmfulness claims.

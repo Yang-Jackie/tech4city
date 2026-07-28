@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import time
 
-from fastapi.testclient import TestClient
-
 from app.analyzer import Layer1Analyzer, analyze_message
 from app.main import create_app as create_backend_app
 from app.repository import InMemoryRepository
+from fastapi.testclient import TestClient
 
 
 def create_app(**options):

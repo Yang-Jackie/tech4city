@@ -6,14 +6,13 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-from fastapi.testclient import TestClient
-from pymongo import AsyncMongoClient
-
 from app.config import Settings
 from app.main import create_app
 from app.models import AnalysisResult, MessageCreate
 from app.mongo_repository import MongoRepository
 from app.repository import MessageConflictError, message_key
+from fastapi.testclient import TestClient
+from pymongo import AsyncMongoClient
 
 MONGODB_TEST_URI = os.getenv("MONGODB_TEST_URI")
 

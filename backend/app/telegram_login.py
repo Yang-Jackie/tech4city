@@ -53,6 +53,10 @@ STATE_NAMES = {
     "authorizationStateWaitOtherDeviceConfirmation": "unsupported",
 }
 
+LIVE_INGESTION_QUEUE_SIZE = 1_000
+LIVE_INGESTION_INITIAL_BACKOFF_SECONDS = 0.25
+LIVE_INGESTION_MAX_BACKOFF_SECONDS = 30.0
+
 
 @dataclass
 class ManagedTelegramSession:
@@ -69,7 +73,11 @@ class ManagedTelegramSession:
     ready_initialized: bool = False
     credential_attempts: int = 0
     update_handler: Any = None
+    ingestion_queue: asyncio.Queue[dict[str, Any]] | None = None
+    ingestion_task: asyncio.Task[None] | None = None
+    ingestion_error: str | None = None
     action_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    initialization_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class TelegramSessionRegistry:
@@ -295,12 +303,13 @@ class TelegramSessionManager:
 
     async def logout(self, session_id: str, owner_token: str) -> dict[str, Any]:
         session = await self._owned(session_id, owner_token)
-        async with session.action_lock:
+        async with session.action_lock, session.initialization_lock:
+            await self._stop_live_ingestion(session)
             with suppress(TdlibError, TdlibTimeout):
-                await asyncio.to_thread(session.client.request, {"@type": "logOut"}, 20)
+                await asyncio.to_thread(
+                    session.client.request, {"@type": "logOut"}, 20
+                )
             await asyncio.to_thread(session.client.close)
-            if session.update_handler is not None:
-                session.client.remove_update_handler(session.update_handler)
             async with self._lock:
                 self._sessions.pop(session_id, None)
             self._registry.mark_logged_out(session_id)
@@ -310,6 +319,7 @@ class TelegramSessionManager:
     async def close(self) -> None:
         sessions = list(self._sessions.values())
         for session in sessions:
+            await self._stop_live_ingestion(session)
             await asyncio.to_thread(session.client.close)
         self._sessions.clear()
         self._registry.close()
@@ -323,7 +333,7 @@ class TelegramSessionManager:
             "telegram_account_id": session.telegram_account_id,
             "saved_messages_chat_id": session.saved_messages_chat_id,
             "display_name": session.display_name,
-            "error": session.error,
+            "error": session.error or session.ingestion_error,
         }
         if status == "wait_password":
             result["password_hint"] = state.get("password_hint") or None
@@ -415,66 +425,144 @@ class TelegramSessionManager:
         return STATE_NAMES.get(state_type, "starting")
 
     async def _initialize_ready(self, session: ManagedTelegramSession) -> None:
-        if session.ready_initialized:
-            return
-        me = await asyncio.to_thread(session.client.request, {"@type": "getMe"}, 20)
-        account_id = int(me["id"])
-        session.telegram_account_id = account_id
-        session.display_name = (
-            " ".join(
-                part for part in (me.get("first_name"), me.get("last_name")) if part
-            )
-            or me.get("username")
-            or f"Telegram {account_id}"
-        )
-
-        try:
-            saved_chat = await asyncio.to_thread(
-                session.client.request,
-                {
-                    "@type": "createPrivateChat",
-                    "user_id": account_id,
-                    "force": False,
-                },
-                20,
-            )
-        except (TdlibError, TdlibTimeout) as exc:
-            session.error = "Could not initialize Saved Messages."
-            raise TelegramLoginError(session.error) from exc
-        session.saved_messages_chat_id = int(saved_chat["id"])
-
-        def on_update(event: dict[str, Any]) -> None:
-            if event.get("@type") != "updateNewMessage":
+        async with session.initialization_lock:
+            if session.ready_initialized:
                 return
-            future = asyncio.run_coroutine_threadsafe(
-                self._ingest_event(session, event), self._loop
+            me = await asyncio.to_thread(
+                session.client.request, {"@type": "getMe"}, 20
             )
-            future.add_done_callback(lambda done: done.exception())
+            account_id = int(me["id"])
+            session.telegram_account_id = account_id
+            session.display_name = (
+                " ".join(
+                    part
+                    for part in (me.get("first_name"), me.get("last_name"))
+                    if part
+                )
+                or me.get("username")
+                or f"Telegram {account_id}"
+            )
 
-        session.update_handler = on_update
-        session.client.add_update_handler(on_update)
+            try:
+                saved_chat = await asyncio.to_thread(
+                    session.client.request,
+                    {
+                        "@type": "createPrivateChat",
+                        "user_id": account_id,
+                        "force": False,
+                    },
+                    20,
+                )
+            except (TdlibError, TdlibTimeout) as exc:
+                session.error = "Could not initialize Saved Messages."
+                raise TelegramLoginError(session.error) from exc
+            session.saved_messages_chat_id = int(saved_chat["id"])
+            session.ingestion_queue = asyncio.Queue(
+                maxsize=LIVE_INGESTION_QUEUE_SIZE
+            )
+
+            def on_update(event: dict[str, Any]) -> None:
+                if event.get("@type") != "updateNewMessage":
+                    return
+                self._loop.call_soon_threadsafe(
+                    self._enqueue_live_update, session, dict(event)
+                )
+
+            session.update_handler = on_update
+            session.client.add_update_handler(on_update)
+            try:
+                try:
+                    history = await asyncio.to_thread(
+                        session.client.request,
+                        {
+                            "@type": "getChatHistory",
+                            "chat_id": session.saved_messages_chat_id,
+                            "from_message_id": 0,
+                            "offset": 0,
+                            "limit": 100,
+                            "only_local": False,
+                        },
+                        30,
+                    )
+                except (TdlibError, TdlibTimeout):
+                    history = {"messages": []}
+                for message in reversed(history.get("messages") or []):
+                    await self._ingest_event(
+                        session, {"@type": "updateNewMessage", "message": message}
+                    )
+            except Exception:
+                await self._stop_live_ingestion(session)
+                raise
+
+            session.ready_initialized = True
+            session.expires_at = datetime.max.replace(tzinfo=UTC)
+            session.ingestion_task = asyncio.create_task(
+                self._drain_live_ingestion(session),
+                name=f"telegram-ingestion-{session.session_id}",
+            )
+            self._registry.save(session, "ready")
+
+    def _enqueue_live_update(
+        self, session: ManagedTelegramSession, event: dict[str, Any]
+    ) -> None:
+        queue = session.ingestion_queue
+        if queue is None:
+            return
         try:
-            history = await asyncio.to_thread(
-                session.client.request,
-                {
-                    "@type": "getChatHistory",
-                    "chat_id": session.saved_messages_chat_id,
-                    "from_message_id": 0,
-                    "offset": 0,
-                    "limit": 100,
-                    "only_local": False,
-                },
-                30,
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            session.ingestion_error = (
+                "Telegram message ingestion is overloaded; reconnect to resynchronize."
             )
-        except (TdlibError, TdlibTimeout):
-            history = {"messages": []}
-        for message in reversed(history.get("messages") or []):
-            await self._ingest_event(
-                session, {"@type": "updateNewMessage", "message": message}
+            print(
+                "Telegram live-ingestion queue is full for session "
+                f"{session.session_id}; reconnect is required."
             )
-        session.ready_initialized = True
-        session.expires_at = datetime.max.replace(tzinfo=UTC)
-        self._registry.save(session, "ready")
+
+    async def _drain_live_ingestion(self, session: ManagedTelegramSession) -> None:
+        queue = session.ingestion_queue
+        if queue is None:
+            return
+        while True:
+            event = await queue.get()
+            delay = LIVE_INGESTION_INITIAL_BACKOFF_SECONDS
+            try:
+                while True:
+                    try:
+                        await self._ingest_event(session, event)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        session.ingestion_error = (
+                            "Telegram message ingestion is temporarily unavailable."
+                        )
+                        print(
+                            "Telegram message ingestion failed for session "
+                            f"{session.session_id} ({type(exc).__name__}); "
+                            f"retrying in {delay:g}s."
+                        )
+                        await asyncio.sleep(delay)
+                        delay = min(
+                            delay * 2,
+                            LIVE_INGESTION_MAX_BACKOFF_SECONDS,
+                        )
+                    else:
+                        session.ingestion_error = None
+                        break
+            finally:
+                queue.task_done()
+
+    async def _stop_live_ingestion(self, session: ManagedTelegramSession) -> None:
+        if session.update_handler is not None:
+            session.client.remove_update_handler(session.update_handler)
+            session.update_handler = None
+        task = session.ingestion_task
+        session.ingestion_task = None
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        session.ingestion_queue = None
 
     async def _ingest_event(
         self, session: ManagedTelegramSession, event: dict[str, Any]

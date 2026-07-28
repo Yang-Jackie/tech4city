@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
-
 from app.analyzer import analyze_message
 from app.demo import create_demo_app as create_backend_demo_app
 from app.repository import InMemoryRepository
+from fastapi.testclient import TestClient
 
 
 def create_demo_app(**options):
@@ -35,6 +34,9 @@ def test_demo_frontend_assets_are_served() -> None:
     assert "No approved explanation is available for this output." in script.text
     assert "Analyzer version" in script.text
     assert "minimumFractionDigits: 2" in script.text
+    assert "Boolean(state.telegramSessionId)" in script.text
+    assert "chatListRequestId" in script.text
+    assert '"Cancel login"' in script.text
     assert styles.status_code == 200
     assert "--primary: oklch(" in styles.text
     assert "279.1" not in styles.text

@@ -1,13 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
+from urllib.parse import urlparse
 
-from fastapi import Cookie, FastAPI, HTTPException, Query, Response, status
+from fastapi import (
+    Cookie,
+    FastAPI,
+    HTTPException,
+    Query,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 
 from .analyzer import Analyzer, Layer1Analyzer, analyze_message, analyzer_version
 from .config import ConfigurationError, Settings
+from .events import EventConnection, LocalEventBroker
 from .ingestion import IncomingMessageService
 from .models import (
     ChatSummary,
@@ -49,7 +61,35 @@ def create_app(
 
         await active_repository.initialize()
         active_analyzer = analyzer or build_analyzer(active_settings)
-        worker = AnalysisWorker(active_repository, active_analyzer)
+        event_broker = LocalEventBroker()
+
+        async def message_event(message: StoredMessage) -> None:
+            await event_broker.publish(
+                "message.created",
+                account_id=message.telegram_account_id,
+                chat_id=message.chat_id,
+                message_id=message.message_id,
+            )
+            await event_broker.publish(
+                "chat.updated",
+                account_id=message.telegram_account_id,
+                chat_id=message.chat_id,
+            )
+
+        async def analysis_event(job: Any, _analysis: Any) -> None:
+            await event_broker.publish(
+                "analysis.updated",
+                account_id=job.telegram_account_id,
+                chat_id=job.chat_id,
+                message_id=job.message_id,
+                data={"status": job.status},
+            )
+
+        worker = AnalysisWorker(
+            active_repository,
+            active_analyzer,
+            notify_event=analysis_event,
+        )
         runner = AnalysisWorkerRunner(worker, active_settings.worker_poll_seconds)
         should_run_worker = (
             active_settings.worker_enabled if worker_enabled is None else worker_enabled
@@ -60,8 +100,10 @@ def create_app(
         app.state.ingestion_service = IncomingMessageService(
             active_repository,
             runner.notify if should_run_worker else None,
+            message_event,
         )
         app.state.analyzer_version = analyzer_version(active_analyzer)
+        app.state.event_broker = event_broker
         manager_factory = telegram_manager_factory or TelegramSessionManager
         app.state.telegram_manager = manager_factory(app.state.ingestion_service)
         if should_run_worker:
@@ -77,10 +119,125 @@ def create_app(
 
     app = FastAPI(
         title="tech4city backend",
-        version="0.4.0",
+        version="0.5.0",
         description="Backend API with injectable memory or MongoDB persistence.",
         lifespan=lifespan,
     )
+
+    def websocket_origin_allowed(websocket: WebSocket) -> bool:
+        origin = websocket.headers.get("origin")
+        if not origin:
+            return True
+        parsed = urlparse(origin)
+        expected_scheme = "https" if websocket.url.scheme == "wss" else "http"
+        return (
+            parsed.scheme == expected_scheme
+            and parsed.netloc == websocket.headers.get("host")
+        )
+
+    async def websocket_sender(
+        websocket: WebSocket, connection: EventConnection
+    ) -> None:
+        while True:
+            await websocket.send_json(await connection.queue.get())
+
+    @app.websocket("/ws")
+    async def websocket_events(websocket: WebSocket) -> None:
+        if not websocket_origin_allowed(websocket):
+            await websocket.close(code=1008, reason="Origin not allowed")
+            return
+        await websocket.accept()
+        broker: LocalEventBroker = app.state.event_broker
+        connection = await broker.connect()
+        sender = asyncio.create_task(
+            websocket_sender(websocket, connection),
+            name="websocket-event-sender",
+        )
+        await connection.queue.put(
+            {"type": "connection.ready", "sequence": 0, "data": {}}
+        )
+        try:
+            while True:
+                command = await websocket.receive_json()
+                if not isinstance(command, dict):
+                    await connection.queue.put(
+                        {
+                            "type": "subscription.error",
+                            "sequence": 0,
+                            "data": {"detail": "Command must be an object"},
+                        }
+                    )
+                    continue
+                command_type = command.get("type")
+                if command_type == "ping":
+                    await connection.queue.put(
+                        {"type": "pong", "sequence": 0, "data": {}}
+                    )
+                    continue
+                if command_type != "subscribe":
+                    await connection.queue.put(
+                        {
+                            "type": "subscription.error",
+                            "sequence": 0,
+                            "data": {"detail": "Unsupported command"},
+                        }
+                    )
+                    continue
+                session_id = command.get("telegram_session_id")
+                chat_id = command.get("chat_id")
+                if chat_id is not None and not isinstance(chat_id, int):
+                    chat_id = None
+                if session_id:
+                    owner = websocket.cookies.get("tech4city_owner")
+                    if not owner:
+                        await websocket.close(code=1008, reason="Owner missing")
+                        return
+                    try:
+                        login = await app.state.telegram_manager.status(
+                            str(session_id), owner
+                        )
+                    except (KeyError, TelegramLoginError):
+                        await websocket.close(code=1008, reason="Session denied")
+                        return
+                    account_id = login.get("telegram_account_id")
+                else:
+                    account_id = command.get("account_id")
+                    if not isinstance(account_id, int):
+                        await connection.queue.put(
+                            {
+                                "type": "subscription.error",
+                                "sequence": 0,
+                                "data": {"detail": "account_id is required"},
+                            }
+                        )
+                        continue
+                await broker.subscribe(
+                    connection,
+                    account_id=account_id,
+                    chat_id=chat_id,
+                    telegram_session_id=str(session_id) if session_id else None,
+                )
+                await connection.queue.put(
+                    {
+                        "type": "subscription.ready",
+                        "sequence": 0,
+                        "account_id": account_id,
+                        "chat_id": chat_id,
+                        "telegram_session_id": session_id,
+                        "data": {},
+                    }
+                )
+        except (ValueError, WebSocketDisconnect):
+            pass
+        finally:
+            sender.cancel()
+            with suppress(
+                asyncio.CancelledError,
+                RuntimeError,
+                WebSocketDisconnect,
+            ):
+                await sender
+            await broker.disconnect(connection)
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
@@ -212,6 +369,16 @@ def create_app(
                 detail=str(exc),
             ) from exc
 
+    async def publish_telegram_status(result: dict[str, Any]) -> None:
+        await app.state.event_broker.publish(
+            "telegram.logged_out"
+            if result.get("status") == "logged_out"
+            else "telegram.authorization.changed",
+            telegram_session_id=result["session_id"],
+            account_id=result.get("telegram_account_id"),
+            data=result,
+        )
+
     @app.post(
         "/telegram/login",
         response_model=TelegramLoginStatus,
@@ -225,6 +392,7 @@ def create_app(
 
         owner = tech4city_owner or secrets.token_urlsafe(32)
         result = await telegram_action(app.state.telegram_manager.create(owner))
+        await publish_telegram_status(result)
         if tech4city_owner is None:
             response.set_cookie(
                 "tech4city_owner",
@@ -266,6 +434,7 @@ def create_app(
                 session_id, require_owner(owner), kind, body.value
             )
         )
+        await publish_telegram_status(result)
         return TelegramLoginStatus(**result)
 
     @app.post(
@@ -323,6 +492,7 @@ def create_app(
                 session_id, require_owner(tech4city_owner)
             )
         )
+        await publish_telegram_status(result)
         response.headers["Cache-Control"] = "no-store"
         return TelegramLogoutStatus(**result)
 
@@ -341,8 +511,14 @@ def create_app(
         tech4city_owner: str | None = Cookie(default=None),
     ) -> list[ChatSummary]:
         account_id = await owned_telegram_account(session_id, tech4city_owner)
+        saved_chat_id = await telegram_action(
+            app.state.telegram_manager.saved_chat_id(
+                session_id, require_owner(tech4city_owner)
+            )
+        )
         response.headers["Cache-Control"] = "no-store"
-        return await app.state.repository.list_chats(account_id)
+        chats = await app.state.repository.list_chats(account_id)
+        return [chat for chat in chats if chat.chat_id == saved_chat_id]
 
     @app.get(
         "/telegram/login/{session_id}/chats/{chat_id}/messages",
