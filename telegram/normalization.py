@@ -73,15 +73,6 @@ def normalize_new_text_message(
     }
 
 
-def message_identity(payload: NormalizedMessage) -> str:
-    """Return a log-safe stable identity without including message content."""
-    return (
-        f"{payload['telegram_account_id']}:"
-        f"{payload['chat_id']}:"
-        f"{payload['message_id']}"
-    )
-
-
 def _required_int(source: dict[str, Any], name: str) -> int:
     if name not in source:
         raise NormalizationError(f"message is missing {name}")
@@ -97,6 +88,5 @@ def _validate_int(value: Any, name: str) -> int:
 __all__ = [
     "NormalizationError",
     "NormalizedMessage",
-    "message_identity",
     "normalize_new_text_message",
 ]

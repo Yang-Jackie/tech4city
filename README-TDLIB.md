@@ -93,14 +93,12 @@ requires you to type `yes` before it sends anything.
 The root [verification command](README.md#verify) includes the offline TDLib and bridge test
 suites.
 
-## Stream new text messages to the backend
+## Use TDLib with the application
 
-After the native library and credentials are ready, follow the root
-[Telegram bridge guide](README.md#run-the-telegram-bridge).
-
-This milestone is real-time only. Transient failures are retried in memory and block later
-deliveries to preserve order, but a bridge process crash can still lose queued updates. A durable
-outbox, historical backfill, and authenticated backend transport remain follow-up work.
+After the native library and credentials are ready, start the application and follow the root
+[browser-managed Telegram guide](README.md#connect-telegram-from-the-frontend). The backend owns
+one isolated TDLib client per browser-connected account and currently imports and streams Saved
+Messages only.
 
 ## Security notes
 

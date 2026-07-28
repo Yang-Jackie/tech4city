@@ -133,39 +133,6 @@ Start it again with `docker compose -f backend\compose.yaml start`.
 `docker compose -f backend\compose.yaml down` removes the container but keeps the named volume.
 Adding `-v` permanently deletes the local database.
 
-### Run the Telegram bridge
-
-The bridge is default-deny and refuses to start without an explicitly allowed chat. Complete the
-[TDLib setup](README-TDLIB.md), then add the backend target and an allowlist to the ignored root
-`.env`. Start with Saved Messages, whose chat ID is normally the Telegram account ID:
-
-```dotenv
-TECH4CITY_BACKEND_URL=http://127.0.0.1:8765
-TECH4CITY_BRIDGE_ALLOWED_CHAT_IDS=your_saved_messages_chat_id
-```
-
-Multiple approved test chats use a comma-separated list. With the combined application already
-running, start the bridge in another terminal:
-
-```powershell
-.\.venv\Scripts\python.exe -m telegram.bridge
-```
-
-Only new nonblank text messages from the allowlist are forwarded. Other chats are ignored and
-message content is not logged. Transient failures are retried in memory in delivery order, but a
-bridge crash can lose queued updates.
-
-A successful delivery prints an identity-only line such as
-`Delivered message 100:100:123 (HTTP 202)`. Inspect that message's report with:
-
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8765/messages/123/report?telegram_account_id=100&chat_id=100"
-```
-
-Optional delivery timing settings are documented in the safe root [`.env.example`](.env.example).
-The backend API is unauthenticated, so keep services bound to `127.0.0.1` and use low-sensitivity
-test chats only.
-
 ## Runtime modes
 
 - `app.demo:app`: backend API plus the static frontend at `/demo/`.
@@ -223,6 +190,6 @@ Remove-Item Env:MONGODB_TEST_URI
 - [Architecture](ARCHITECTURE.md): system design, boundaries, data flow, and current limitations.
 - [Backend reference](backend/README.md): runtime configuration, persistence, API contracts, and
   WebSocket events.
-- [TDLib guide](README-TDLIB.md): native build, Telegram credentials, interactive account tests,
-  and security.
+- [TDLib guide](README-TDLIB.md): native build, Telegram credentials, browser-managed sessions,
+  interactive account tests, and security.
 - [Frontend folder](frontend/README.md): static interface structure and runtime behavior.

@@ -157,7 +157,7 @@ function renderChatList() {
       createElement(
         "span",
         "",
-        "Seed demo data or run the allowlisted Telegram bridge, then refresh.",
+        "Seed demo data or connect Telegram, then refresh.",
       ),
     );
     chatList.replaceChildren(empty);
@@ -263,7 +263,7 @@ function showEmptyConversation() {
     createElement(
       "p",
       "",
-      "Seed sanitized demo data or send a text message in an allowlisted Telegram chat.",
+      "Seed sanitized demo data or send a text message to connected Saved Messages.",
     ),
   );
   messageList.replaceChildren(content);

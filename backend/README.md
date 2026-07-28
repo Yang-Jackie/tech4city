@@ -59,10 +59,10 @@ GET /messages/{message_id}/report
 `POST /internal/worker/run-once` remains a compatibility/debugging hook. It is unauthenticated
 and must not be exposed publicly or called while the automatic worker is enabled.
 
-## Telegram bridge contract
+## Message ingestion contract
 
-The bridge calls `POST /messages`; this is the cross-process equivalent of
-`processIncomingMessage()`. The current milestone accepts normalized new text messages only:
+`POST /messages` is the public equivalent of `processIncomingMessage()` for seed tools and other
+approved producers. It accepts normalized new text messages:
 
 ```json
 {
@@ -75,18 +75,14 @@ The bridge calls `POST /messages`; this is the cross-process equivalent of
 }
 ```
 
-The response contract is:
+The HTTP response contract is:
 
 - `202 Accepted`: a new message was stored and queued.
 - `200 OK`: an identical replay was already accepted.
 - `409 Conflict`: the same account/chat/message identity has different immutable content.
 - `422 Unprocessable Entity`: the normalized event is invalid.
 
-The Telegram bridge requires a non-empty `TECH4CITY_BRIDGE_ALLOWED_CHAT_IDS`, ignores all other
-chats before queueing, and implements ordered delivery with in-memory transient retries. Backend
-authentication and a durable bridge outbox are not implemented in this demo.
-
-The combined demo additionally exposes a browser-owned login flow at
+The combined application exposes a browser-owned login flow at
 `/telegram/login`. It supports phone, code, and Telegram two-step verification,
 with one isolated TDLib client per concurrent account. Cookie-protected chat
 routes expose Saved Messages only. See the root

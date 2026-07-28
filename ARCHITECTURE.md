@@ -3,12 +3,12 @@
 ## What We Can Offer Now
 
 The backend accepts normalized Telegram messages, stores analysis results, and serves a multi-chat
-WebSocket-enabled demo frontend. The TDLib bridge forwards real-time text messages only from an explicit
-default-deny chat allowlist through the documented HTTP contract.
+WebSocket-enabled frontend. Browser-owned TDLib clients currently import and stream text messages
+from Saved Messages directly into the application service.
 
 | Capability | Current status |
 |---|---|
-| Accept a new Telegram text message | Implemented through `POST /messages`. |
+| Accept a new Telegram text message | Implemented through browser-managed TDLib and `POST /messages`. |
 | Reject malformed or conflicting events | Implemented with strict validation, idempotency, and HTTP 409/422 responses. |
 | Persist messages and analysis state | Implemented in memory or MongoDB; authenticated MongoDB restart persistence was tested. |
 | Run analysis after ingestion | Implemented with an automatic in-process worker. |
@@ -33,12 +33,12 @@ Telegram
    |
    | TDLib updateNewMessage (ordered update stream)
    v
-TDLib bridge [real-time text connector implemented]
-   |  allowlist chat IDs, then filter new text messages
+TelegramSessionManager [embedded in FastAPI]
+   |  verify browser ownership and filter Saved Messages
    |  normalize Telegram fields
-   |  POST /messages and retry transient delivery failures
+   |  call IncomingMessageService directly
    v
-Backend API [implemented]
+Backend application service [implemented]
    |  validate -> deduplicate -> persist message -> ensure analysis job
    |                                      |
    |  return 202/200 immediately           | wake automatic worker
@@ -66,7 +66,7 @@ poll the report endpoint to observe `pending`, `processing`, `completed`, or `fa
 
 | Owner | Provides now | Does not currently provide |
 |---|---|---|
-| TDLib bridge developer | Telegram authorization/client lifecycle plus default-deny chat isolation, ordered real-time new-text normalization, and backend delivery. | A durable outbox, history backfill, edits, deletes, or media forwarding. |
+| Telegram integration developer | Browser-owned TDLib authorization, session lifecycle, chat isolation, and real-time new-text ingestion. | Chat selection, sending messages, edits, deletes, or media support. |
 | Backend | HTTP ingestion, validation, deduplication, storage, job execution, analyzer adapter, conversations, and reports. | API authentication, tenant authorization, production recovery/operations, or frontend UI. |
 | ML owner | Existing Layer 1 artifact and model-behavior decisions. | An approved mapping from raw Layer 1 scores to harmful/severity/category claims. |
 | Frontend | Discovers stored chats, shows factual conversation summaries, receives WebSocket updates with REST snapshot recovery, distinguishes sent and received messages, and exposes approved analysis fields in a dismissible drawer. | Production user identity, chat titles from Telegram metadata, or an ML-approved detailed explanation. |
@@ -148,24 +148,23 @@ Processing is deliberately non-blocking:
 5. The API returns HTTP 202 for a new message or HTTP 200 for an identical replay; it does not wait
    for analysis.
 
-The bridge should handle responses as follows:
+External HTTP producers should handle responses as follows:
 
-| Response | Meaning | Bridge action |
+| Response | Meaning | Producer action |
 |---|---|---|
 | `202 Accepted` | New message stored and queued. | Treat delivery as successful. |
 | `200 OK` | Identical event was already accepted. | Treat delivery as successful. |
 | `409 Conflict` | Same identity was previously stored with different immutable content. | Do not retry blindly; log/investigate normalization. |
-| `422 Unprocessable Entity` | Payload does not satisfy the backend schema. | Do not retry unchanged; correct the bridge payload. |
+| `422 Unprocessable Entity` | Payload does not satisfy the backend schema. | Do not retry unchanged; correct the payload. |
 | Network error or `5xx` | Delivery or backend failed transiently. | Retry the exact same payload with bounded backoff. |
 
-This HTTP operation is the cross-process equivalent of `processIncomingMessage()`. The friend
-does not import backend Python or call Layer 1 directly. The bridge preserves TDLib update order
-and stable Telegram IDs; the backend owns everything after successful HTTP delivery.
+This HTTP operation is the cross-process equivalent of `processIncomingMessage()`. The
+browser-managed Telegram session manager runs inside the backend and calls that application
+service directly, preserving stable Telegram identities without an HTTP loopback.
 
-The implemented event scope is new text messages from explicitly allowlisted chat IDs only. An
-empty allowlist prevents bridge startup. Edits, deletions, media, secret chats, authentication, and
-a durable delivery outbox are not part of the current backend contract. The bridge retries
-transient failures in memory while its process remains alive.
+The implemented Telegram scope is new text messages from browser-owned Saved Messages sessions.
+Edits, deletions, media, secret chats, general chat selection, and sending messages are not yet
+supported.
 
 ## Analysis Pipeline
 
@@ -258,8 +257,7 @@ backup policy, metrics, or CI.
 ## Explicitly Unsupported Today
 
 - Telegram message edits, deletions, media, secret chats, and historical-backfill semantics.
-- Live Telegram-network end-to-end verification of the TDLib bridge.
-- Bridge authentication, durable delivery outbox, and backend-managed bridge retries.
+- Telegram chat selection and sending messages from the application.
 - Remote-user application login, tenant management, and multi-tenant isolation. Local Telegram
   sessions are scoped by an HttpOnly browser-ownership cookie.
 - Automatic recovery of jobs stranded in `processing`, bounded retries, and dead-letter handling.

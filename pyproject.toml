@@ -1,7 +1,7 @@
 [project]
 name = "tech4city"
 version = "0.1.0"
-description = "Local tech4city application, Telegram bridge, and research utilities"
+description = "Local tech4city application, browser-managed Telegram client, and research utilities"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.139,<1",
