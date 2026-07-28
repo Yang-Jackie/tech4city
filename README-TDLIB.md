@@ -46,7 +46,7 @@ telegram/.tdlib-build/install/bin/
 ## 2. Prepare the Python environment
 
 Complete the root [first-time setup](README.md#first-time-setup). It creates the unified `.venv`
-used by the application, bridge, and interactive TDLib utility.
+used by the application and interactive TDLib utility.
 
 ## 3. Configure credentials
 
@@ -90,8 +90,8 @@ requires you to type `yes` before it sends anything.
 
 ## Offline tests
 
-The root [verification command](README.md#verify) includes the offline TDLib and bridge test
-suites.
+The root [verification command](README.md#verify) includes the offline TDLib and Telegram
+integration test suites.
 
 ## Use TDLib with the application
 

@@ -1,183 +1,283 @@
 # tech4city
 
-Local FastAPI application for ingesting Telegram text messages, running queued analysis, and
-reviewing conversations through a build-free web interface. The default mode is entirely local:
-in-memory storage with a deterministic fake analyzer.
+Local application for testing Telegram message ingestion and analysis through a FastAPI backend
+and a build-free web interface.
+
+`start_demo.ps1` runs the frontend, backend, analysis worker, WebSocket notifications, and
+browser-managed Telegram support in one process. There is no separate Telegram bridge.
 
 ## Prerequisites
 
-The documented workflow targets 64-bit Windows and PowerShell. Install:
+The supported local workflow uses 64-bit Windows and PowerShell.
 
-- Git.
-- Python 3.11 or newer (`python --version`).
-- PowerShell 5.1 or newer.
+- Git
+- Python 3.11
+- PowerShell 5.1 or newer
+- Docker Desktop only for the optional MongoDB test
+- Node.js only for the optional frontend syntax check
 
-Docker Desktop is needed only for MongoDB persistence. Node.js is optional and is used only for
-the frontend JavaScript syntax check. Connecting a real Telegram account additionally requires the
-native tools listed in [the TDLib guide](README-TDLIB.md#prerequisites).
+Real Telegram testing also requires the native tools in the
+[TDLib guide](README-TDLIB.md#prerequisites).
 
 ## First-time setup
 
-From the repository root:
+Run all commands from the repository root:
 
 ```powershell
-python -m pip install "uv>=0.11,<1"
-python -m uv sync --locked --dev
+py -3.11 --version
+py -3.11 -m pip install --user "uv>=0.11,<1"
+py -3.11 -m uv sync --locked --dev --link-mode=copy
 ```
 
-This creates `.venv` from the checked-in `uv.lock` and installs the application, Telegram Python
-utilities, and development tools. The default mode needs no `.env`, password, database, model
-download, or API key.
+This creates `.venv` and installs the local project.
 
-## Quick start
+## Test 1: fastest local test
 
-Start the combined backend and frontend:
+This is the recommended first test. It uses memory storage and a deterministic fake analyzer. It does not require Docker, TDLib, Telegram credentials, a model, or an API key.
+
+Create the backend configuration if necessary. Confirm these values in `backend/.env`:
+
+```dotenv
+TECH4CITY_STORAGE=memory
+TECH4CITY_ANALYZER=fake
+TECH4CITY_WORKER_ENABLED=true
+TECH4CITY_WORKER_POLL_SECONDS=0.25
+```
+
+### Terminal 1: start the application
 
 ```powershell
 .\scripts\start_demo.ps1
 ```
 
-Open `http://127.0.0.1:8765/`; the root redirects to `/demo/`.
+Expected startup:
 
-In a second terminal, seed four sanitized chats and wait for their analysis jobs:
+```text
+Application startup complete.
+Uvicorn running on http://127.0.0.1:8765
+```
+
+Open `http://127.0.0.1:8765/`.
+
+### Terminal 2: add sample conversations
 
 ```powershell
 .\.venv\Scripts\python.exe backend\scripts\seed_demo.py
 ```
 
-The command prints the exact demo URL and uses account `900001` by default. Enter that account ID
-in the frontend. Memory mode loses its messages when Uvicorn stops.
+Expected result:
 
-For the backend API without the frontend, run:
-
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+```text
+Backend ready: storage=memory analyzer=fake-v1
+Seeded 12 sanitized messages across 4 chats.
+All analysis jobs completed.
 ```
 
-Open `http://127.0.0.1:8000/docs` for the API or `http://127.0.0.1:8000/health` for the active
-storage and analyzer configuration.
+Open the URL printed by the command. The sample account ID is `900001`.
 
-## Optional integrations
+Memory storage is disposable: messages and results disappear when Terminal 1 stops.
 
-### Connect Telegram from the frontend
+## Test 2: Layer 1 analysis
 
-First [build TDLib and configure Telegram credentials](README-TDLIB.md). Keep
-`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TDJSON_PATH`, and
-`TDLIB_DATABASE_ENCRYPTION_KEY` in the ignored root `.env`. Start the combined application,
-select **Connect Telegram**, and complete the phone, code, and optional two-step-verification
-prompts.
+Complete Test 1 first. Stop the application with Ctrl+C before installing the ML dependencies.
 
-Each login uses an isolated encrypted TDLib directory under `telegram/.tdlib/web`. A local SQLite
-registry stores only opaque ownership and account metadata; authentication codes and passwords
-are never stored. The browser owns sessions through an HttpOnly, SameSite=Strict cookie.
-Connected mode imports up to 100 recent text messages from Saved Messages and then accepts only
-new Saved Messages updates.
-
-**Log out** calls Telegram's `logOut`, closes that TDLib client, and removes its local session
-directory. Keep the service bound to `127.0.0.1`; this application does not provide remote-user
-authentication.
-
-### Run Layer 1
-
-Copy the safe backend configuration once:
+### Install the ML extra
 
 ```powershell
-Copy-Item backend\.env.example backend\.env
+py -3.11 -m uv sync --locked --dev --extra ml --link-mode=copy
 ```
 
-Edit `backend/.env` and set:
+Confirm that the packages are installed without importing the full ML stack:
+
+```powershell
+.\.venv\Scripts\python.exe -c "import importlib.util as u; print({n: bool(u.find_spec(n)) for n in ('peft', 'torch', 'transformers')})"
+```
+
+All three values should be `True`.
+
+### Configure Layer 1
+
+Set these values in `backend/.env`:
 
 ```dotenv
+TECH4CITY_STORAGE=memory
 TECH4CITY_ANALYZER=layer1
+TECH4CITY_LAYER1_MODEL_DIR=Layer/cyberbully-roblox-pii-lora-synbullying/best_model
+TECH4CITY_LAYER1_PIPELINE_VERSION=layer1-roblox-pii-lora-synbullying-v1
 ```
 
-Install the optional model runtime and start the application:
+The tracked files are a PEFT/LoRA adapter for the gated
+`Roblox/roblox-pii-classifier` base model. If the base model is not already cached, obtain access
+from its owner and add this only to the ignored `backend/.env`:
+
+```dotenv
+HF_TOKEN=your_approved_huggingface_token
+```
+
+Never commit the token.
+
+### Test the model before starting the application
+
+Use the backend adapter for the smoke test. Do not use `from Layer.Layer1 import Layer1`, because
+the `Layer` package currently imports Layer 2 and its separate research dependencies.
 
 ```powershell
-python -m uv sync --locked --dev --extra ml
+.\.venv\Scripts\python.exe -c "import asyncio; from pathlib import Path; from dotenv import load_dotenv; load_dotenv('backend/.env'); from app.analyzer import Layer1Analyzer; from app.models import MessageCreate; analyzer=Layer1Analyzer(pipeline_version='smoke-test', model_dir=Path(r'Layer\cyberbully-roblox-pii-lora-synbullying\best_model').resolve()); message=MessageCreate(telegram_account_id=1, chat_id=1, message_id=1, sender_id=1, text='This is a neutral test message.', sent_at='2026-07-28T00:00:00Z'); print(asyncio.run(analyzer(message, [])).model_dump())"
+```
+
+The first run may download the base model and initialize CUDA. Continue only after it prints a
+result containing `status`, `raw_label`, `normal_score`, and `bully_score`.
+
+### Run the application and seed data
+
+Terminal 1:
+
+```powershell
 .\scripts\start_demo.ps1
 ```
 
-Run `.\.venv\Scripts\python.exe backend\scripts\seed_demo.py` in another terminal. The tracked
-PEFT adapter references the gated `Roblox/roblox-pii-classifier` base model. Set an approved
-`HF_TOKEN` only in the ignored `backend/.env` if the base weights are not cached. Raw labels and
-continuous scores are integration output, not an accuracy or calibration claim.
+Terminal 2:
 
-### Add MongoDB persistence
+```powershell
+.\.venv\Scripts\python.exe backend\scripts\seed_demo.py
+```
 
-Choose a local password containing letters, numbers, `_`, or `-`; the project does not generate
-one.
+Expected health configuration:
 
-1. Copy `backend/.env.example` to `backend/.env` if needed.
-2. Uncomment the MongoDB block.
-3. Replace both password placeholders with the same password.
-4. Start Docker Desktop.
-5. From the repository root, run:
+```powershell
+Invoke-RestMethod http://127.0.0.1:8765/health
+```
+
+```text
+storage  : memory
+analyzer : layer1-roblox-pii-lora-synbullying-v1
+```
+
+The health endpoint confirms the selected analyzer. The model itself loads lazily when the first
+message is analyzed, which is why the direct smoke test is important.
+
+## Test 3: connect a real Telegram account
+
+This path uses a TDLib client embedded in `start_demo`. It does not require or start another
+bridge process.
+
+### Prepare TDLib
+
+Follow [README-TDLIB.md](README-TDLIB.md) to:
+
+1. Install the native build prerequisites.
+2. Build `tdjson.dll`.
+3. Obtain `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`.
+
+Create the root configuration if necessary:
+
+```powershell
+if (-not (Test-Path .env)) {
+    Copy-Item .env.example .env
+}
+```
+
+Set the credentials in the ignored root `.env`:
+
+```dotenv
+TELEGRAM_API_ID=your_api_id
+TELEGRAM_API_HASH=your_api_hash
+TDJSON_PATH=telegram/.tdlib-build/install/bin/tdjson.dll
+TDLIB_DATABASE_ENCRYPTION_KEY=
+TDLIB_USE_TEST_DC=false
+```
+
+### Connect Telegram from the frontend
+
+1. Run `.\scripts\start_demo.ps1`.
+2. Open `http://127.0.0.1:8765/`.
+3. Select **Connect Telegram**.
+4. Complete the phone, code, and optional two-step-verification prompts.
+5. Send a text message to Saved Messages from Telegram.
+
+The backend receives the TDLib `updateNewMessage`, stores it, analyzes it, and notifies the
+frontend through the application WebSocket. No second process is required.
+
+Current limitation: browser-connected Telegram imports up to 100 recent text messages and streams
+new text messages from Saved Messages only.
+
+Each browser login uses an isolated encrypted database under `telegram/.tdlib/web`. Do not run two
+application processes against the same database. **Log out** through the frontend when you intend
+to revoke and remove that local session.
+
+## Optional integrations
+
+### Test MongoDB persistence
+
+Use MongoDB when messages and analysis results must survive an application restart.
+
+1. Start Docker Desktop.
+2. Copy `backend/.env.example` to `backend/.env` if necessary.
+3. Uncomment the MongoDB block.
+4. Replace both password placeholders with the same URL-safe development password.
+5. Keep either `TECH4CITY_ANALYZER=fake` or `TECH4CITY_ANALYZER=layer1`.
+
+Start MongoDB:
 
 ```powershell
 docker compose -f backend\compose.yaml up -d
 docker compose -f backend\compose.yaml ps
+```
+
+Then run the application normally:
+
+```powershell
 .\scripts\start_demo.ps1
 ```
 
-`docker compose -f backend\compose.yaml ps` should show MongoDB as healthy. Confirm that
-`http://127.0.0.1:8765/health` reports `"storage": "mongodb"`.
+The health endpoint should report `"storage": "mongodb"`.
 
-Stop MongoDB without deleting stored data:
+Stop MongoDB without deleting data:
 
 ```powershell
 docker compose -f backend\compose.yaml stop
 ```
 
-Start it again with `docker compose -f backend\compose.yaml start`.
 `docker compose -f backend\compose.yaml down` removes the container but keeps the named volume.
 Adding `-v` permanently deletes the local database.
 
-## Runtime modes
+## What each command does
 
-- `app.demo:app`: backend API plus the static frontend at `/demo/`.
-- `app.main:app`: backend API only.
-- `TECH4CITY_STORAGE=memory`: fastest disposable storage.
-- `TECH4CITY_STORAGE=mongodb`: persistent messages, jobs, and analysis runs.
-- `TECH4CITY_ANALYZER=fake`: deterministic software-contract testing.
-- `TECH4CITY_ANALYZER=layer1`: local classifier through the same worker contract.
+| Command | Type | Purpose |
+|---|---|---|
+| `py -3.11 -m uv sync ...` | One-time or dependency update | Creates or updates `.venv`; stop the application first. |
+| `.\scripts\start_demo.ps1` | Long-running | Starts frontend, backend, worker, WebSocket, and embedded Telegram support. |
+| `.\.venv\Scripts\python.exe backend\scripts\seed_demo.py` | One-time | Sends 12 sanitized messages to an already-running backend, waits for analysis, then exits. |
+| `.\.venv\Scripts\python.exe -m telegram.cli` | Interactive diagnostic | Tests TDLib login, chats, history, and Saved Messages independently. |
+| `docker compose ...` | Long-running service | Starts optional persistent MongoDB storage. |
 
-The frontend uses a same-origin WebSocket for login, chat, message, and analysis notifications.
-REST remains authoritative, and the frontend falls back to two-second polling while the socket is
-unavailable. The WebSocket broker is process-local, so run only one Uvicorn worker.
-
-## Preprocessing and research
-
-Run Confessit preprocessing from the repository root after first-time setup:
-
-```powershell
-.\.venv\Scripts\python.exe -m utils.preprocess_confessit --input_file data/nusconfessit.json --output_file data/nus_processed.json
-.\.venv\Scripts\python.exe -m utils.preprocess_confessit --input_file data/ntuconfessit.json --output_file data/ntu_processed.json
-```
-
-The optional scripts under `utils/` and Layer 2 experiments use a larger scientific/LLM
-dependency set:
-
-```powershell
-python -m uv sync --locked --dev --extra research
-```
-
-Run utility modules with `.\.venv\Scripts\python.exe`. Utilities that call OpenAI require
-`OPENAI_API_KEY` in the ignored root `.env`.
+`seed_demo.py` does not start the application. `start_demo.ps1` does not create sample messages.
 
 ## Verify
+
+Stop the application before changing dependencies. The offline verification does not require
+MongoDB, TDLib network access, or a model:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -p no:cacheprovider
 .\.venv\Scripts\ruff.exe check backend
-.\.venv\Scripts\ruff.exe format --check backend
-node --check frontend/app.js
 ```
 
-The first three commands cover the Python application. Run the final command only when Node.js is
-installed.
+Current expected result:
 
-To include the live MongoDB repository test while the Compose service is running:
+```text
+51 passed, 2 skipped
+```
+
+The skipped tests are the optional live MongoDB tests.
+
+If Node.js is installed:
+
+```powershell
+node --check frontend\app.js
+```
+
+To include the live MongoDB repository test while MongoDB is running:
 
 ```powershell
 $env:MONGODB_TEST_URI = (Get-Content backend\.env | Select-String '^MONGODB_URI=').Line.Split('=', 2)[1]
@@ -185,11 +285,62 @@ $env:MONGODB_TEST_URI = (Get-Content backend\.env | Select-String '^MONGODB_URI=
 Remove-Item Env:MONGODB_TEST_URI
 ```
 
+## Common problems
+
+### `uv sync` reports `Access is denied`
+
+A running Python process is using `.venv`. Stop `start_demo`, tests, and Python shells before
+retrying. If necessary, delete only `.venv` and recreate it with the first-time setup command.
+Do not delete `.env`, `backend/.env`, `telegram/.tdlib`, `.tdlib-build`, or `Layer/`.
+
+### Layer 1 reports `No module named peft`
+
+The ML extra was not installed:
+
+```powershell
+py -3.11 -m uv sync --locked --dev --extra ml --link-mode=copy
+```
+
+### Hugging Face returns an authorization error
+
+The adapter references a gated base model. Confirm that the account has access and that
+`HF_TOKEN` is set in the ignored `backend/.env`.
+
+### Importing Layer 1 asks for `sentence_transformers`
+
+`from Layer.Layer1 import Layer1` executes `Layer/__init__.py`, which currently imports Layer 2.
+Use the backend-adapter smoke test documented above. Layer 2 dependencies are not required for
+Layer 1 application testing.
+
+### TDLib reports that `td.binlog` is locked
+
+Only one TDLib client may open a session database. Stop other tech4city application processes and
+retry. Concurrent requests within one application share a single restoration task.
+
+### Seeded messages disappear
+
+`TECH4CITY_STORAGE=memory` is intentionally disposable. Use the MongoDB test configuration when
+restart persistence is required.
+
+### `seed_demo.py` reports `analysis failed`
+
+The backend accepted the messages, but the configured analyzer failed. For Layer 1, run the direct
+smoke test first so dependency, token, download, and model errors are visible outside the worker.
+
+## Research utilities
+
+Research and Layer 2 utilities are not required for application testing. Install them separately:
+
+```powershell
+py -3.11 -m uv sync --locked --dev --extra research --link-mode=copy
+```
+
+Utilities that call OpenAI require `OPENAI_API_KEY` in the ignored root `.env`.
+
 ## Technical documentation
 
-- [Architecture](ARCHITECTURE.md): system design, boundaries, data flow, and current limitations.
-- [Backend reference](backend/README.md): runtime configuration, persistence, API contracts, and
-  WebSocket events.
-- [TDLib guide](README-TDLIB.md): native build, Telegram credentials, browser-managed sessions,
-  interactive account tests, and security.
+- [Architecture](ARCHITECTURE.md): system design, boundaries, and current limitations.
+- [Backend reference](backend/README.md): configuration, persistence, API contracts, and WebSocket
+  events.
+- [TDLib guide](README-TDLIB.md): native build, credentials, interactive tests, and security.
 - [Frontend folder](frontend/README.md): static interface structure and runtime behavior.
