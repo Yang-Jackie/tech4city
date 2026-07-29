@@ -97,8 +97,9 @@ integration test suites.
 
 After the native library and credentials are ready, start the application and follow the root
 [browser-managed Telegram guide](README.md#connect-telegram-from-the-frontend). The backend owns
-one isolated TDLib client per browser-connected account and currently imports and streams Saved
-Messages only.
+one isolated TDLib client per browser-connected account. Login lists the account's recent chats
+without importing their messages. Opening a chat imports its latest text history for analysis and
+streams new text messages from that selected chat.
 
 ## Security notes
 

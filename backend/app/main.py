@@ -37,7 +37,13 @@ from .repository import (
     MessageConflictError,
 )
 from .telegram_login import TelegramLoginError, TelegramSessionManager
-from .telegram_models import LoginValue, TelegramLoginStatus, TelegramLogoutStatus
+from .telegram_models import (
+    LoginValue,
+    TelegramChatOpenStatus,
+    TelegramChatSummary,
+    TelegramLoginStatus,
+    TelegramLogoutStatus,
+)
 from .worker import AnalysisWorker, AnalysisWorkerRunner
 
 TelegramManagerFactory = Callable[[Any], Any]
@@ -503,22 +509,40 @@ def create_app(
 
     @app.get(
         "/telegram/login/{session_id}/chats",
-        response_model=list[ChatSummary],
+        response_model=list[TelegramChatSummary],
     )
     async def list_owned_telegram_chats(
         session_id: str,
         response: Response,
         tech4city_owner: str | None = Cookie(default=None),
-    ) -> list[ChatSummary]:
-        account_id = await owned_telegram_account(session_id, tech4city_owner)
-        saved_chat_id = await telegram_action(
-            app.state.telegram_manager.saved_chat_id(
+    ) -> list[TelegramChatSummary]:
+        chats = await telegram_action(
+            app.state.telegram_manager.list_chats(
                 session_id, require_owner(tech4city_owner)
             )
         )
         response.headers["Cache-Control"] = "no-store"
-        chats = await app.state.repository.list_chats(account_id)
-        return [chat for chat in chats if chat.chat_id == saved_chat_id]
+        return [TelegramChatSummary(**chat) for chat in chats]
+
+    @app.post(
+        "/telegram/login/{session_id}/chats/{chat_id}/open",
+        response_model=TelegramChatOpenStatus,
+    )
+    async def open_owned_telegram_chat(
+        session_id: str,
+        chat_id: int,
+        response: Response,
+        tech4city_owner: str | None = Cookie(default=None),
+    ) -> TelegramChatOpenStatus:
+        result = await telegram_action(
+            app.state.telegram_manager.open_chat(
+                session_id,
+                require_owner(tech4city_owner),
+                chat_id,
+            )
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return TelegramChatOpenStatus(**result)
 
     @app.get(
         "/telegram/login/{session_id}/chats/{chat_id}/messages",
@@ -531,15 +555,15 @@ def create_app(
         tech4city_owner: str | None = Cookie(default=None),
     ) -> list[StoredMessage]:
         account_id = await owned_telegram_account(session_id, tech4city_owner)
-        saved_chat_id = await telegram_action(
-            app.state.telegram_manager.saved_chat_id(
+        selected_chat_id = await telegram_action(
+            app.state.telegram_manager.selected_chat_id(
                 session_id, require_owner(tech4city_owner)
             )
         )
-        if chat_id != saved_chat_id:
+        if chat_id != selected_chat_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only Saved Messages is available",
+                detail="Open this Telegram chat before reading its messages",
             )
         response.headers["Cache-Control"] = "no-store"
         return await app.state.repository.list_chat_messages(account_id, chat_id)
@@ -555,12 +579,12 @@ def create_app(
         tech4city_owner: str | None = Cookie(default=None),
     ) -> MessageReport:
         account_id = await owned_telegram_account(session_id, tech4city_owner)
-        saved_chat_id = await telegram_action(
-            app.state.telegram_manager.saved_chat_id(
+        selected_chat_id = await telegram_action(
+            app.state.telegram_manager.selected_chat_id(
                 session_id, require_owner(tech4city_owner)
             )
         )
-        key = (account_id, saved_chat_id, message_id)
+        key = (account_id, selected_chat_id, message_id)
         message = await app.state.repository.get_message(key)
         if message is None:
             raise HTTPException(

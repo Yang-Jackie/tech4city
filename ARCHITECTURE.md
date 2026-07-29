@@ -3,8 +3,9 @@
 ## What We Can Offer Now
 
 The backend accepts normalized Telegram messages, stores analysis results, and serves a multi-chat
-WebSocket-enabled frontend. Browser-owned TDLib clients currently import and stream text messages
-from Saved Messages directly into the application service.
+WebSocket-enabled frontend. Browser-owned TDLib clients list recent Telegram chats without
+importing them. When the user opens a chat, the client imports its latest history and streams new
+text messages from that selected chat into the application service.
 
 | Capability | Current status |
 |---|---|
@@ -15,6 +16,7 @@ from Saved Messages directly into the application service.
 | Develop and demo without an ML model | Implemented with the deterministic `fake` analyzer. |
 | Invoke the repository's existing Layer 1 classifier | Software integration and local cached-model inference verified; model quality remains ML-owned. |
 | Discover stored chats and read conversation/message analysis | Implemented through chat-summary, conversation, and report APIs. |
+| List and select a Telegram chat | Implemented through browser-owned TDLib routes; selection is process-local and not persisted. |
 | Serve a frontend chat interface | Implemented as a responsive chat-discovery viewer with a closable analysis drawer at `/demo/` when running `app.demo:app`. |
 | Operate as a secure production service | Not yet; authentication, recovery, retention, observability, and deployment hardening remain. |
 
@@ -31,10 +33,10 @@ Telegram/TDLib lifecycle, user interfaces, and ML-quality decisions remain separ
 ```text
 Telegram
    |
-   | TDLib updateNewMessage (ordered update stream)
+   | getChats -> user opens one chat -> getChatHistory/updateNewMessage
    v
 TelegramSessionManager [embedded in FastAPI]
-   |  verify browser ownership and filter Saved Messages
+   |  verify browser ownership and filter the session-selected chat
    |  normalize Telegram fields
    |  call IncomingMessageService directly
    v
@@ -66,10 +68,10 @@ poll the report endpoint to observe `pending`, `processing`, `completed`, or `fa
 
 | Owner | Provides now | Does not currently provide |
 |---|---|---|
-| Telegram integration developer | Browser-owned TDLib authorization, session lifecycle, chat isolation, and real-time new-text ingestion. | Chat selection, sending messages, edits, deletes, or media support. |
+| Telegram integration developer | Browser-owned TDLib authorization, session lifecycle, session-only chat selection, and real-time new-text ingestion. | Sending messages, edits, deletes, or media support. |
 | Backend | HTTP ingestion, validation, deduplication, storage, job execution, analyzer adapter, conversations, and reports. | API authentication, tenant authorization, production recovery/operations, or frontend UI. |
 | ML owner | Existing Layer 1 artifact and model-behavior decisions. | An approved mapping from raw Layer 1 scores to harmful/severity/category claims. |
-| Frontend | Discovers stored chats, shows factual conversation summaries, receives WebSocket updates with REST snapshot recovery, distinguishes sent and received messages, and exposes approved analysis fields in a dismissible drawer. | Production user identity, chat titles from Telegram metadata, or an ML-approved detailed explanation. |
+| Frontend | Lists Telegram chat titles, explicitly opens one chat for analysis, receives WebSocket updates with REST snapshot recovery, distinguishes sent and received messages, and exposes approved analysis fields in a dismissible drawer. | Production user identity or an ML-approved detailed explanation. |
 
 ## Runtime Shape
 
@@ -162,9 +164,10 @@ This HTTP operation is the cross-process equivalent of `processIncomingMessage()
 browser-managed Telegram session manager runs inside the backend and calls that application
 service directly, preserving stable Telegram identities without an HTTP loopback.
 
-The implemented Telegram scope is new text messages from browser-owned Saved Messages sessions.
-Edits, deletions, media, secret chats, general chat selection, and sending messages are not yet
-supported.
+The implemented Telegram scope is the latest 100 messages from one explicitly opened chat plus
+new text messages received while it remains selected. Listing chats alone imports nothing, and
+the selected chat ID is not persisted. Edits, deletions, media, secret chats, deeper historical
+backfill, and sending messages are not yet supported.
 
 ## Analysis Pipeline
 
@@ -250,20 +253,20 @@ backup policy, metrics, or CI.
 
 1. Add authenticated account/tenant scoping to every API operation.
 2. Add processing leases, crash recovery, bounded retries, and dead-letter visibility.
-3. Define retention/deletion and transactional consistency policies.
+3. Define retention/deletion, selected-chat persistence, and transactional consistency policies.
 4. Add structured operational logging, metrics, health/readiness separation, and CI.
 5. Apply an ML-owner-approved mapping only if higher-level findings are required.
 
 ## Explicitly Unsupported Today
 
-- Telegram message edits, deletions, media, secret chats, and historical-backfill semantics.
-- Telegram chat selection and sending messages from the application.
+- Telegram message edits, deletions, media, secret chats, and backfill beyond the latest 100
+  messages.
+- Persisted Telegram chat selection and sending messages from the application.
 - Remote-user application login, tenant management, and multi-tenant isolation. Local Telegram
   sessions are scoped by an HttpOnly browser-ownership cookie.
 - Automatic recovery of jobs stranded in `processing`, bounded retries, and dead-letter handling.
 - Transactional message/job and result/completion writes or reconciliation after partial failure.
 - Retention/deletion enforcement, backups, production secrets, operational metrics, and CI.
-- Shared multi-worker WebSocket delivery, durable event replay, push notifications, and Telegram
-  chat-title metadata. The current WebSocket broker is single-process and reconnects through REST
-  snapshot recovery.
+- Shared multi-worker WebSocket delivery, durable event replay, and push notifications. The
+  current WebSocket broker is single-process and reconnects through REST snapshot recovery.
 - Verified model-quality, safety, accuracy, threshold, or higher-level harmfulness claims.

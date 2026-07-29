@@ -56,6 +56,7 @@ STATE_NAMES = {
 LIVE_INGESTION_QUEUE_SIZE = 1_000
 LIVE_INGESTION_INITIAL_BACKOFF_SECONDS = 0.25
 LIVE_INGESTION_MAX_BACKOFF_SECONDS = 30.0
+CHAT_HISTORY_LIMIT = 100
 
 
 @dataclass
@@ -68,6 +69,7 @@ class ManagedTelegramSession:
     expires_at: datetime
     telegram_account_id: int | None = None
     saved_messages_chat_id: int | None = None
+    selected_chat_id: int | None = None
     display_name: str | None = None
     error: str | None = None
     ready_initialized: bool = False
@@ -79,6 +81,7 @@ class ManagedTelegramSession:
     closed: bool = False
     action_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     initialization_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    chat_selection_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class TelegramSessionRegistry:
@@ -327,6 +330,101 @@ class TelegramSessionManager:
             raise TelegramLoginError("Saved Messages identity is unavailable.")
         return session.saved_messages_chat_id
 
+    async def list_chats(
+        self, session_id: str, owner_token: str
+    ) -> list[dict[str, Any]]:
+        session = await self._ready_session(session_id, owner_token)
+        async with session.action_lock:
+            try:
+                result = await asyncio.to_thread(
+                    session.client.request,
+                    {
+                        "@type": "getChats",
+                        "chat_list": {"@type": "chatListMain"},
+                        "limit": 100,
+                    },
+                    30,
+                )
+                chats = []
+                for raw_chat_id in result.get("chat_ids") or []:
+                    chat_id = int(raw_chat_id)
+                    chat = await asyncio.to_thread(
+                        session.client.request,
+                        {"@type": "getChat", "chat_id": chat_id},
+                        20,
+                    )
+                    chats.append(self._describe_chat(session, chat))
+                return chats
+            except (TdlibError, TdlibTimeout) as exc:
+                raise TelegramLoginError(
+                    "Could not load the Telegram chat list."
+                ) from exc
+
+    async def open_chat(
+        self, session_id: str, owner_token: str, chat_id: int
+    ) -> dict[str, Any]:
+        session = await self._ready_session(session_id, owner_token)
+        async with session.action_lock, session.chat_selection_lock:
+            previous_chat_id = session.selected_chat_id
+            opened_new_chat = previous_chat_id != chat_id
+            try:
+                await asyncio.to_thread(
+                    session.client.request,
+                    {"@type": "getChat", "chat_id": chat_id},
+                    20,
+                )
+                if opened_new_chat:
+                    await asyncio.to_thread(
+                        session.client.request,
+                        {"@type": "openChat", "chat_id": chat_id},
+                        20,
+                    )
+                session.selected_chat_id = chat_id
+                history = await self._load_chat_history(session, chat_id)
+            except (TdlibError, TdlibTimeout) as exc:
+                session.selected_chat_id = previous_chat_id
+                if opened_new_chat:
+                    with suppress(TdlibError, TdlibTimeout):
+                        await asyncio.to_thread(
+                            session.client.request,
+                            {"@type": "closeChat", "chat_id": chat_id},
+                            20,
+                        )
+                raise TelegramLoginError("Could not open this Telegram chat.") from exc
+
+            message_count = 0
+            new_message_count = 0
+            for message in reversed(history):
+                result = await self._ingest_event(
+                    session,
+                    {"@type": "updateNewMessage", "message": message},
+                )
+                if result is None:
+                    continue
+                message_count += 1
+                if result.created:
+                    new_message_count += 1
+            if previous_chat_id is not None and opened_new_chat:
+                with suppress(TdlibError, TdlibTimeout):
+                    await asyncio.to_thread(
+                        session.client.request,
+                        {"@type": "closeChat", "chat_id": previous_chat_id},
+                        20,
+                    )
+            return {
+                "session_id": session.session_id,
+                "chat_id": chat_id,
+                "history_message_count": len(history),
+                "message_count": message_count,
+                "new_message_count": new_message_count,
+            }
+
+    async def selected_chat_id(self, session_id: str, owner_token: str) -> int:
+        session = await self._ready_session(session_id, owner_token)
+        if session.selected_chat_id is None:
+            raise TelegramLoginError("Open a Telegram chat first.")
+        return session.selected_chat_id
+
     async def logout(self, session_id: str, owner_token: str) -> dict[str, Any]:
         session = await self._owned(session_id, owner_token)
         async with session.action_lock, session.initialization_lock:
@@ -377,6 +475,7 @@ class TelegramSessionManager:
             "status": status,
             "telegram_account_id": session.telegram_account_id,
             "saved_messages_chat_id": session.saved_messages_chat_id,
+            "selected_chat_id": session.selected_chat_id,
             "display_name": session.display_name,
             "error": session.error or session.ingestion_error,
         }
@@ -411,6 +510,16 @@ class TelegramSessionManager:
         session = await asyncio.shield(restoration[1])
         if not secrets.compare_digest(session.owner_token, owner_token):
             raise KeyError(session_id)
+        return session
+
+    async def _ready_session(
+        self, session_id: str, owner_token: str
+    ) -> ManagedTelegramSession:
+        session = await self._owned(session_id, owner_token)
+        if self._status_name(session) != "ready":
+            raise TelegramLoginError("Telegram login is not ready.")
+        if not session.ready_initialized:
+            await self._initialize_ready(session)
         return session
 
     async def _restore_session(
@@ -553,20 +662,6 @@ class TelegramSessionManager:
                 or f"Telegram {account_id}"
             )
 
-            try:
-                saved_chat = await asyncio.to_thread(
-                    session.client.request,
-                    {
-                        "@type": "createPrivateChat",
-                        "user_id": account_id,
-                        "force": False,
-                    },
-                    20,
-                )
-            except (TdlibError, TdlibTimeout) as exc:
-                session.error = "Could not initialize Saved Messages."
-                raise TelegramLoginError(session.error) from exc
-            session.saved_messages_chat_id = int(saved_chat["id"])
             session.ingestion_queue = asyncio.Queue(maxsize=LIVE_INGESTION_QUEUE_SIZE)
 
             def on_update(event: dict[str, Any]) -> None:
@@ -578,29 +673,6 @@ class TelegramSessionManager:
 
             session.update_handler = on_update
             session.client.add_update_handler(on_update)
-            try:
-                try:
-                    history = await asyncio.to_thread(
-                        session.client.request,
-                        {
-                            "@type": "getChatHistory",
-                            "chat_id": session.saved_messages_chat_id,
-                            "from_message_id": 0,
-                            "offset": 0,
-                            "limit": 100,
-                            "only_local": False,
-                        },
-                        30,
-                    )
-                except (TdlibError, TdlibTimeout):
-                    history = {"messages": []}
-                for message in reversed(history.get("messages") or []):
-                    await self._ingest_event(
-                        session, {"@type": "updateNewMessage", "message": message}
-                    )
-            except Exception:
-                await self._stop_live_ingestion(session)
-                raise
 
             session.ready_initialized = True
             session.expires_at = datetime.max.replace(tzinfo=UTC)
@@ -674,16 +746,120 @@ class TelegramSessionManager:
 
     async def _ingest_event(
         self, session: ManagedTelegramSession, event: dict[str, Any]
-    ) -> None:
+    ) -> Any | None:
         if session.telegram_account_id is None:
-            return
+            return None
         try:
             payload = normalize_new_text_message(event, session.telegram_account_id)
         except NormalizationError:
-            return
-        if payload is None or payload["chat_id"] != session.saved_messages_chat_id:
-            return
-        await self._ingestion_service.process(MessageCreate(**payload))
+            return None
+        if payload is None or payload["chat_id"] != session.selected_chat_id:
+            return None
+        return await self._ingestion_service.process(MessageCreate(**payload))
+
+    async def _load_chat_history(
+        self,
+        session: ManagedTelegramSession,
+        chat_id: int,
+    ) -> list[dict[str, Any]]:
+        history: list[dict[str, Any]] = []
+        seen_message_ids: set[int] = set()
+        from_message_id = 0
+        while len(history) < CHAT_HISTORY_LIMIT:
+            result = await asyncio.to_thread(
+                session.client.request,
+                {
+                    "@type": "getChatHistory",
+                    "chat_id": chat_id,
+                    "from_message_id": from_message_id,
+                    "offset": 0,
+                    "limit": CHAT_HISTORY_LIMIT - len(history),
+                    "only_local": False,
+                },
+                30,
+            )
+            page = [
+                message
+                for message in (result.get("messages") or [])
+                if isinstance(message, dict)
+            ]
+            new_messages = []
+            for message in page:
+                message_id = message.get("id")
+                if (
+                    not isinstance(message_id, int)
+                    or isinstance(message_id, bool)
+                    or message_id in seen_message_ids
+                ):
+                    continue
+                seen_message_ids.add(message_id)
+                new_messages.append(message)
+            if not new_messages:
+                break
+            history.extend(new_messages)
+            next_message_id = page[-1].get("id") if page else None
+            if (
+                not isinstance(next_message_id, int)
+                or isinstance(next_message_id, bool)
+                or next_message_id == from_message_id
+            ):
+                break
+            from_message_id = next_message_id
+        return history[:CHAT_HISTORY_LIMIT]
+
+    @staticmethod
+    def _describe_chat(
+        session: ManagedTelegramSession, chat: dict[str, Any]
+    ) -> dict[str, Any]:
+        chat_id = int(chat["id"])
+        last_message = chat.get("last_message") or {}
+        content = last_message.get("content") or {}
+        content_type = content.get("@type")
+        text = ""
+        if content_type == "messageText":
+            text = str((content.get("text") or {}).get("text") or "")
+        else:
+            caption = str((content.get("caption") or {}).get("text") or "")
+            text = caption or {
+                "messageAnimation": "Animation",
+                "messageAudio": "Audio",
+                "messageDocument": "Document",
+                "messagePhoto": "Photo",
+                "messagePoll": "Poll",
+                "messageSticker": "Sticker",
+                "messageVideo": "Video",
+                "messageVideoNote": "Video message",
+                "messageVoiceNote": "Voice message",
+            }.get(str(content_type), "")
+        preview = " ".join(text.split())
+        if len(preview) > 160:
+            preview = f"{preview[:157]}..."
+        type_name = str((chat.get("type") or {}).get("@type") or "")
+        chat_type = {
+            "chatTypePrivate": "private",
+            "chatTypeBasicGroup": "basic_group",
+            "chatTypeSupergroup": "supergroup",
+            "chatTypeSecret": "secret",
+        }.get(type_name, "unknown")
+        last_message_date = last_message.get("date")
+        last_message_at = (
+            datetime.fromtimestamp(int(last_message_date), tz=UTC)
+            if last_message_date
+            else None
+        )
+        is_saved_messages = chat_id == session.telegram_account_id
+        title = str(chat.get("title") or "").strip()
+        if not title:
+            title = "Saved Messages" if is_saved_messages else f"Chat {chat_id}"
+        return {
+            "chat_id": chat_id,
+            "title": title,
+            "chat_type": chat_type,
+            "unread_count": max(0, int(chat.get("unread_count") or 0)),
+            "last_message_at": last_message_at,
+            "last_message_preview": preview,
+            "is_saved_messages": is_saved_messages,
+        }
 
     @staticmethod
     def _safe_tdlib_error(exc: TdlibError) -> str:

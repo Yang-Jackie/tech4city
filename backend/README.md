@@ -84,8 +84,10 @@ The HTTP response contract is:
 
 The combined application exposes a browser-owned login flow at
 `/telegram/login`. It supports phone, code, and Telegram two-step verification,
-with one isolated TDLib client per concurrent account. Cookie-protected chat
-routes expose Saved Messages only. See the root
+with one isolated TDLib client per concurrent account. Cookie-protected routes
+list recent Telegram chats without importing them. An explicit chat-open request
+selects one chat in process memory, imports up to 100 recent messages, and queues
+its text messages for analysis. See the root
 [Telegram frontend guide](../README.md#connect-telegram-from-the-frontend) for operation and
 storage details.
 
@@ -116,6 +118,10 @@ In `layer1` mode, reports expose the classifier's `status`, `raw_label`, `normal
 - `GET /chats?telegram_account_id=...`
 - `GET /chats/{chat_id}/messages?telegram_account_id=...`
 - `GET /messages/{message_id}/report?telegram_account_id=...&chat_id=...`
+- `GET /telegram/login/{session_id}/chats`
+- `POST /telegram/login/{session_id}/chats/{chat_id}/open`
+- `GET /telegram/login/{session_id}/chats/{chat_id}/messages`
+- `GET /telegram/login/{session_id}/messages/{message_id}/report`
 
 The fake analyzer remains explicitly synthetic. Layer 1 integration exposes model output but
 does not establish or claim model quality, safety, or accuracy. See the root

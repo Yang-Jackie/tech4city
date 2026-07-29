@@ -78,6 +78,7 @@ function showToast(message) {
 }
 
 function formatTime(value) {
+  if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Unknown time";
   return new Intl.DateTimeFormat(undefined, {
@@ -103,8 +104,23 @@ function formatPercent(score) {
   }).format(score);
 }
 
-function chatLabel(chatId) {
-  return String(chatId) === state.accountId ? "Saved Messages" : `Chat ${chatId}`;
+function chatLabel(chatOrId) {
+  if (typeof chatOrId === "object" && chatOrId !== null) {
+    if (chatOrId.title) return chatOrId.title;
+    if (chatOrId.is_saved_messages) return "Saved Messages";
+    return `Chat ${chatOrId.chat_id}`;
+  }
+  return String(chatOrId) === state.accountId ? "Saved Messages" : `Chat ${chatOrId}`;
+}
+
+function chatTypeLabel(chatType) {
+  return {
+    private: "Private chat",
+    basic_group: "Group",
+    supergroup: "Supergroup",
+    secret: "Secret chat",
+    unknown: "Telegram chat",
+  }[chatType] || "Telegram chat";
 }
 
 function plural(count, singular, pluralValue = `${singular}s`) {
@@ -143,7 +159,8 @@ function showMessageSkeletons() {
 function renderChatList() {
   const query = chatSearch.value.trim().toLowerCase();
   const visibleChats = state.chats.filter((chat) => {
-    const searchable = `${chatLabel(chat.chat_id)} ${chat.chat_id} ${chat.last_message_preview}`;
+    const searchable =
+      `${chatLabel(chat)} ${chat.chat_id} ${chat.last_message_preview} ${chat.chat_type || ""}`;
     return searchable.toLowerCase().includes(query);
   });
 
@@ -151,13 +168,16 @@ function renderChatList() {
   chatSearch.disabled = state.chats.length === 0;
 
   if (state.chats.length === 0) {
+    const connected = usingConnectedTelegram();
     const empty = createElement("div", "compact-empty");
     empty.append(
-      createElement("strong", "", "No stored chats yet"),
+      createElement("strong", "", connected ? "No Telegram chats available" : "No stored chats yet"),
       createElement(
         "span",
         "",
-        "Seed demo data or connect Telegram, then refresh.",
+        connected
+          ? "Refresh after Telegram has finished loading the account chat list."
+          : "Seed demo data or connect Telegram, then refresh.",
       ),
     );
     chatList.replaceChildren(empty);
@@ -183,14 +203,27 @@ function renderChatList() {
 
     const top = createElement("span", "chat-item-top");
     top.append(
-      createElement("strong", "chat-item-title", chatLabel(chat.chat_id)),
+      createElement("strong", "chat-item-title", chatLabel(chat)),
       createElement("time", "chat-item-time", formatTime(chat.last_message_at)),
     );
-    const preview = createElement("span", "chat-item-preview", chat.last_message_preview);
+    const preview = createElement(
+      "span",
+      "chat-item-preview",
+      chat.last_message_preview || "No recent text preview",
+    );
+    const connectedChat = Object.hasOwn(chat, "chat_type");
+    const metadata = connectedChat
+      ? [
+          chatTypeLabel(chat.chat_type),
+          chat.unread_count ? `${chat.unread_count} unread` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : `${chat.message_count} ${plural(chat.message_count, "message")} · ${chat.participant_count} ${plural(chat.participant_count, "participant")}`;
     const meta = createElement(
       "span",
       "chat-item-meta",
-      `${chat.message_count} ${plural(chat.message_count, "message")} · ${chat.participant_count} ${plural(chat.participant_count, "participant")}`,
+      metadata,
     );
     button.append(top, preview, meta);
     button.addEventListener("click", () => selectChat(String(chat.chat_id)));
@@ -259,11 +292,13 @@ function showConversationError(message) {
 function showEmptyConversation() {
   const content = createElement("div", "empty-state");
   content.append(
-    createElement("h3", "", "No forwarded messages yet"),
+    createElement("h3", "", "No text messages available"),
     createElement(
       "p",
       "",
-      "Seed sanitized demo data or send a text message to connected Saved Messages.",
+      usingConnectedTelegram()
+        ? "This chat has no recent text messages that can be analyzed."
+        : "Seed sanitized demo data to populate this conversation.",
     ),
   );
   messageList.replaceChildren(content);
@@ -563,12 +598,15 @@ async function selectChat(chatId) {
   const nextChatId = chatId.trim();
   if (!state.accountId || !nextChatId) return;
   const accountId = state.accountId;
+  const sessionId = state.telegramSessionId;
+  const connected = usingConnectedTelegram();
+  const chat = state.chats.find((item) => String(item.chat_id) === nextChatId);
   state.chatId = nextChatId;
   state.messages = [];
   resetAnalysis();
   workspace.classList.add("has-active-chat");
   conversationContext.textContent = `Telegram account ${state.accountId}`;
-  conversationTitle.textContent = chatLabel(nextChatId);
+  conversationTitle.textContent = chatLabel(chat || nextChatId);
   conversationSummary.replaceChildren();
   refreshButton.disabled = false;
   renderChatList();
@@ -576,18 +614,58 @@ async function selectChat(chatId) {
 
   const url = new URL(window.location.href);
   url.searchParams.set("telegram_account_id", state.accountId);
-  url.searchParams.set("chat_id", state.chatId);
+  if (connected) {
+    url.searchParams.delete("chat_id");
+  } else {
+    url.searchParams.set("chat_id", state.chatId);
+  }
   window.history.replaceState({}, "", url);
 
   try {
+    if (connected) {
+      showMessageSkeletons();
+      setConnectionState("loading", "Loading chat and queuing analysis");
+      const opened = await telegramRequest(
+        `/telegram/login/${encodeURIComponent(sessionId)}/chats/${encodeURIComponent(nextChatId)}/open`,
+        { method: "POST", body: "{}" },
+      );
+      if (
+        accountId !== state.accountId ||
+        nextChatId !== state.chatId ||
+        sessionId !== state.telegramSessionId
+      ) return;
+      if (opened.message_count > 0) {
+        showToast(
+          `Loaded ${opened.message_count} recent text ${plural(opened.message_count, "message")} for analysis.`,
+        );
+      } else if (opened.history_message_count > 0) {
+        showToast(
+          `Telegram returned ${opened.history_message_count} recent ${plural(opened.history_message_count, "message")}, but none contained analyzable text.`,
+        );
+      } else {
+        showToast("Telegram returned no recent history for this chat.");
+      }
+    }
     await loadConversation({ initial: true });
+    if (
+      accountId === state.accountId &&
+      nextChatId === state.chatId &&
+      (!connected || sessionId === state.telegramSessionId)
+    ) {
+      setConnectionState("connected", websocketIsOpen() ? "Live via WebSocket" : "Backend connected");
+    }
   } catch (error) {
-    if (accountId !== state.accountId || nextChatId !== state.chatId) return;
+    if (
+      accountId !== state.accountId ||
+      nextChatId !== state.chatId ||
+      (connected && sessionId !== state.telegramSessionId)
+    ) return;
+    setConnectionState("error", "Could not open Telegram chat");
     showConversationError(error.message);
   }
 }
 
-async function loadAccount(accountId, preferredChatId = "") {
+async function loadAccount(accountId, preferredChatId = "", { autoSelect = true } = {}) {
   const nextAccountId = accountId.trim();
   state.accountId = nextAccountId;
   state.chatId = "";
@@ -604,12 +682,17 @@ async function loadAccount(accountId, preferredChatId = "") {
   window.history.replaceState({}, "", url);
 
   stopFallbackPolling();
-  setConnectionState("loading", "Loading stored chats");
+  setConnectionState(
+    "loading",
+    usingConnectedTelegram() ? "Loading Telegram chats" : "Loading stored chats",
+  );
   try {
     const loaded = await loadChats({ initial: true });
     if (!loaded || nextAccountId !== state.accountId) return;
     setConnectionState("connected", "Backend connected");
-    const firstChatId = preferredChatId || (state.chats[0] ? String(state.chats[0].chat_id) : "");
+    const firstChatId =
+      preferredChatId ||
+      (autoSelect && state.chats[0] ? String(state.chats[0].chat_id) : "");
     if (firstChatId) await selectChat(firstChatId);
   } catch (error) {
     if (nextAccountId !== state.accountId) return;
@@ -869,15 +952,13 @@ function renderTelegramLogin(login) {
       "Telegram requires your two-step verification password. It is sent once and never stored.";
     telegramLoginValue.focus();
   } else if (status === "ready") {
-    telegramLoginMessage.textContent = `${login.display_name || "Telegram"} is connected. Only Saved Messages are imported.`;
+    telegramLoginMessage.textContent =
+      `${login.display_name || "Telegram"} is connected. Choose a chat to load and analyze its recent text messages.`;
     telegramLoginButton.textContent = "Telegram connected";
     state.telegramSessionId = login.session_id;
     window.localStorage.setItem("tech4cityTelegramSession", login.session_id);
     if (!alreadyLoaded) {
-      loadAccount(
-        String(login.telegram_account_id),
-        String(login.saved_messages_chat_id || login.telegram_account_id),
-      );
+      loadAccount(String(login.telegram_account_id), "", { autoSelect: false });
     }
   } else if (status === "registration_required") {
     telegramLoginMessage.textContent =

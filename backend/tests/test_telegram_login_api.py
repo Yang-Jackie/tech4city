@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from app.analyzer import analyze_message
@@ -23,6 +24,7 @@ class StubTelegramManager:
         self.owner = ""
         self.state = "wait_phone"
         self.values: list[tuple[str, str]] = []
+        self.selected_chat: int | None = None
 
     async def create(self, owner: str):
         self.owner = owner
@@ -62,6 +64,50 @@ class StubTelegramManager:
 
     async def saved_chat_id(self, session_id: str, owner: str):
         return await self.account_id(session_id, owner)
+
+    async def list_chats(self, session_id: str, owner: str):
+        await self.account_id(session_id, owner)
+        return [
+            {
+                "chat_id": 999,
+                "title": "Team chat",
+                "chat_type": "basic_group",
+                "unread_count": 2,
+                "last_message_at": "2026-07-28T10:00:00Z",
+                "last_message_preview": "Chat 999",
+                "is_saved_messages": False,
+            },
+            {
+                "chat_id": 123,
+                "title": "Saved Messages",
+                "chat_type": "private",
+                "unread_count": 0,
+                "last_message_at": "2026-07-28T10:00:00Z",
+                "last_message_preview": "Chat 123",
+                "is_saved_messages": True,
+            },
+        ]
+
+    async def open_chat(
+        self, session_id: str, owner: str, chat_id: int
+    ) -> dict[str, int | str]:
+        await self.account_id(session_id, owner)
+        if chat_id not in {123, 999}:
+            raise TelegramLoginError("Could not open this Telegram chat.")
+        self.selected_chat = chat_id
+        return {
+            "session_id": session_id,
+            "chat_id": chat_id,
+            "history_message_count": 1,
+            "message_count": 1,
+            "new_message_count": 0,
+        }
+
+    async def selected_chat_id(self, session_id: str, owner: str) -> int:
+        await self.account_id(session_id, owner)
+        if self.selected_chat is None:
+            raise TelegramLoginError("Open a Telegram chat first.")
+        return self.selected_chat
 
     async def close(self) -> None:
         pass
@@ -166,7 +212,7 @@ def test_logout_calls_manager_and_returns_terminal_state() -> None:
     assert response.json() == {"session_id": "login-1", "status": "logged_out"}
 
 
-def test_connected_chat_routes_are_cookie_owned() -> None:
+def test_connected_chat_routes_require_an_explicit_session_only_selection() -> None:
     with TestClient(make_app()) as owner:
         for chat_id, message_id in ((123, 1), (999, 2)):
             created = owner.post(
@@ -185,17 +231,28 @@ def test_connected_chat_routes_are_cookie_owned() -> None:
         owner.post("/telegram/login/login-1/phone", json={"value": "+84123"})
         owner.post("/telegram/login/login-1/code", json={"value": "12345"})
         owner.post("/telegram/login/login-1/password", json={"value": "password"})
-        owned = owner.get("/telegram/login/login-1/chats")
+        chats = owner.get("/telegram/login/login-1/chats")
+        unopened = owner.get("/telegram/login/login-1/chats/999/messages")
+        opened = owner.post("/telegram/login/login-1/chats/999/open")
+        messages = owner.get("/telegram/login/login-1/chats/999/messages")
+        report = owner.get("/telegram/login/login-1/messages/2/report")
+        previous_chat = owner.get("/telegram/login/login-1/chats/123/messages")
 
         with TestClient(make_app()) as stranger:
             denied = stranger.get("/telegram/login/login-1/chats")
 
-    assert owned.status_code == 200
-    assert [chat["chat_id"] for chat in owned.json()] == [123]
+    assert chats.status_code == 200
+    assert [chat["chat_id"] for chat in chats.json()] == [999, 123]
+    assert unopened.status_code == 409
+    assert opened.status_code == 200
+    assert opened.json()["chat_id"] == 999
+    assert [message["message_id"] for message in messages.json()] == [2]
+    assert report.status_code == 200
+    assert previous_chat.status_code == 403
     assert denied.status_code == 401
 
 
-def test_ready_initialization_materializes_saved_messages_before_history(
+def test_ready_initialization_does_not_import_any_chat_before_selection(
     tmp_path,
 ) -> None:
     calls: list[dict] = []
@@ -213,11 +270,6 @@ def test_ready_initialization_materializes_saved_messages_before_history(
             calls.append(query)
             if query["@type"] == "getMe":
                 return {"id": 123, "first_name": "Test", "last_name": "User"}
-            if query["@type"] == "createPrivateChat":
-                return {"id": 999}
-            if query["@type"] == "getChatHistory":
-                assert query["chat_id"] == 999
-                return {"messages": []}
             raise AssertionError(query)
 
         def add_update_handler(self, handler):
@@ -241,13 +293,214 @@ def test_ready_initialization_materializes_saved_messages_before_history(
         await manager._initialize_ready(session)
         await manager._stop_live_ingestion(session)
         manager._registry.close()
-        assert session.saved_messages_chat_id == 999
+        assert session.selected_chat_id is None
 
     asyncio.run(run())
-    assert [call["@type"] for call in calls] == [
-        "getMe",
-        "createPrivateChat",
+    assert [call["@type"] for call in calls] == ["getMe"]
+
+
+def test_tdlib_chat_list_exposes_metadata_without_ingesting_messages(tmp_path) -> None:
+    class FakeIngestion:
+        async def process(self, _message):
+            raise AssertionError("listing chats must not ingest messages")
+
+    class FakeClient:
+        authorization_state = {"@type": "authorizationStateReady"}
+        authorization_version = 1
+
+        def request(self, query, _timeout=30):
+            if query["@type"] == "getChats":
+                assert query["chat_list"] == {"@type": "chatListMain"}
+                return {"chat_ids": [999, 123]}
+            if query["@type"] == "getChat" and query["chat_id"] == 999:
+                return {
+                    "id": 999,
+                    "title": "Team chat",
+                    "type": {"@type": "chatTypeBasicGroup"},
+                    "unread_count": 3,
+                    "last_message": {
+                        "date": 1_753_697_600,
+                        "content": {
+                            "@type": "messageText",
+                            "text": {"text": "Latest team message"},
+                        },
+                    },
+                }
+            if query["@type"] == "getChat" and query["chat_id"] == 123:
+                return {
+                    "id": 123,
+                    "title": "",
+                    "type": {"@type": "chatTypePrivate"},
+                    "unread_count": 0,
+                }
+            raise AssertionError(query)
+
+        def close(self):
+            pass
+
+    async def run() -> list[dict]:
+        manager = TelegramSessionManager(FakeIngestion(), root=tmp_path)
+        now = datetime.now(UTC)
+        session = ManagedTelegramSession(
+            session_id="session",
+            owner_token="owner",
+            directory_name="directory",
+            client=FakeClient(),
+            created_at=now,
+            expires_at=datetime.max.replace(tzinfo=UTC),
+            telegram_account_id=123,
+            ready_initialized=True,
+        )
+        manager._sessions[session.session_id] = session
+        chats = await manager.list_chats("session", "owner")
+        await manager.close()
+        return chats
+
+    chats = asyncio.run(run())
+    assert [chat["chat_id"] for chat in chats] == [999, 123]
+    assert chats[0]["title"] == "Team chat"
+    assert chats[0]["chat_type"] == "basic_group"
+    assert chats[0]["last_message_preview"] == "Latest team message"
+    assert chats[1]["title"] == "Saved Messages"
+    assert chats[1]["is_saved_messages"] is True
+
+
+def test_open_chat_imports_only_recent_text_messages_and_keeps_selection_in_memory(
+    tmp_path,
+) -> None:
+    ingested: list[MessageCreate] = []
+    requests: list[dict] = []
+
+    class FakeIngestion:
+        async def process(self, message):
+            ingested.append(message)
+            return SimpleNamespace(created=True)
+
+    class FakeClient:
+        authorization_state = {"@type": "authorizationStateReady"}
+        authorization_version = 1
+
+        def request(self, query, _timeout=30):
+            requests.append(query)
+            if query["@type"] == "getChat":
+                if query["chat_id"] != 999:
+                    raise TdlibError({"code": 400, "message": "Chat not found"})
+                return {"id": 999, "title": "Team chat"}
+            if query["@type"] == "openChat":
+                assert query["chat_id"] == 999
+                return {"@type": "ok"}
+            if query["@type"] == "closeChat":
+                assert query["chat_id"] == 555
+                return {"@type": "ok"}
+            if query["@type"] == "getChatHistory":
+                assert query["chat_id"] == 999
+                if query["from_message_id"] == 0:
+                    return {
+                        "messages": [
+                            {
+                                "id": 2,
+                                "chat_id": 999,
+                                "date": 1_753_697_601,
+                                "sender_id": {
+                                    "@type": "messageSenderUser",
+                                    "user_id": 456,
+                                },
+                                "content": {"@type": "messagePhoto"},
+                            }
+                        ]
+                    }
+                if query["from_message_id"] == 1:
+                    return {
+                        "messages": [
+                            {
+                                "id": 1,
+                                "chat_id": 999,
+                                "date": 1_753_697_600,
+                                "sender_id": {
+                                    "@type": "messageSenderUser",
+                                    "user_id": 456,
+                                },
+                                "content": {
+                                    "@type": "messageText",
+                                    "text": {"text": "Analyze this"},
+                                },
+                            }
+                        ]
+                    }
+                assert query["from_message_id"] == 2
+                return {
+                    "messages": [
+                        {
+                            "id": 2,
+                            "chat_id": 999,
+                            "date": 1_753_697_601,
+                            "sender_id": {
+                                "@type": "messageSenderUser",
+                                "user_id": 456,
+                            },
+                            "content": {"@type": "messagePhoto"},
+                        },
+                        {
+                            "id": 1,
+                            "chat_id": 999,
+                            "date": 1_753_697_600,
+                            "sender_id": {
+                                "@type": "messageSenderUser",
+                                "user_id": 456,
+                            },
+                            "content": {
+                                "@type": "messageText",
+                                "text": {"text": "Analyze this"},
+                            },
+                        },
+                    ]
+                }
+            raise AssertionError(query)
+
+        def close(self):
+            pass
+
+    async def run() -> tuple[dict, int, dict]:
+        manager = TelegramSessionManager(FakeIngestion(), root=tmp_path)
+        now = datetime.now(UTC)
+        session = ManagedTelegramSession(
+            session_id="session",
+            owner_token="owner",
+            directory_name="directory",
+            client=FakeClient(),
+            created_at=now,
+            expires_at=datetime.max.replace(tzinfo=UTC),
+            telegram_account_id=123,
+            selected_chat_id=555,
+            ready_initialized=True,
+        )
+        manager._sessions[session.session_id] = session
+        manager._registry.save(session, "ready")
+        opened = await manager.open_chat("session", "owner", 999)
+        selected = await manager.selected_chat_id("session", "owner")
+        saved = manager._registry.get_active("session", "owner")
+        await manager.close()
+        assert saved is not None
+        return opened, selected, saved
+
+    opened, selected, saved = asyncio.run(run())
+    assert opened == {
+        "session_id": "session",
+        "chat_id": 999,
+        "history_message_count": 2,
+        "message_count": 1,
+        "new_message_count": 1,
+    }
+    assert selected == 999
+    assert [message.text for message in ingested] == ["Analyze this"]
+    assert "selected_chat_id" not in saved
+    assert [request["@type"] for request in requests] == [
+        "getChat",
+        "openChat",
         "getChatHistory",
+        "getChatHistory",
+        "getChatHistory",
+        "closeChat",
     ]
 
 
@@ -302,7 +555,26 @@ def test_live_ingestion_is_ordered_and_retries_transient_failures(tmp_path) -> N
             expires_at=now + timedelta(minutes=15),
         )
         await manager._initialize_ready(session)
+        session.selected_chat_id = 999
         assert client.handler is not None
+        client.handler(
+            {
+                "@type": "updateNewMessage",
+                "message": {
+                    "id": 9,
+                    "chat_id": 555,
+                    "date": 1_753_697_599,
+                    "sender_id": {
+                        "@type": "messageSenderUser",
+                        "user_id": 123,
+                    },
+                    "content": {
+                        "@type": "messageText",
+                        "text": {"text": "Not selected"},
+                    },
+                },
+            }
+        )
         client.handler(
             {
                 "@type": "updateNewMessage",

@@ -193,13 +193,21 @@ TDLIB_USE_TEST_DC=false
 2. Open `http://127.0.0.1:8765/`.
 3. Select **Connect Telegram**.
 4. Complete the phone, code, and optional two-step-verification prompts.
-5. Send a text message to Saved Messages from Telegram.
+5. Choose a chat from the Telegram chat list.
+6. Open the chat to load its latest 100 messages and queue its text messages for analysis.
+7. Send a new text message in that Telegram chat to test live analysis.
 
-The backend receives the TDLib `updateNewMessage`, stores it, analyzes it, and notifies the
-frontend through the application WebSocket. No second process is required.
+Login and chat listing do not import messages. Opening a chat imports its recent text history,
+creates the analysis jobs, and makes that chat the active source for live TDLib
+`updateNewMessage` events. The frontend receives message and analysis updates through the
+application WebSocket. No second process is required.
 
-Current limitation: browser-connected Telegram imports up to 100 recent text messages and streams
-new text messages from Saved Messages only.
+The active chat selection is process-local and is not written to SQLite or MongoDB. Imported
+messages and analysis results follow `TECH4CITY_STORAGE`: the default `memory` mode is disposable,
+while the optional `mongodb` mode persists them.
+
+Current limitations: only the latest 100 messages are inspected when a chat is opened, only text
+messages are analyzed, and sending, edits, deletes, and media analysis are not implemented.
 
 Each browser login uses an isolated encrypted database under `telegram/.tdlib/web`. Do not run two
 application processes against the same database. **Log out** through the frontend when you intend
@@ -266,7 +274,7 @@ MongoDB, TDLib network access, or a model:
 Current expected result:
 
 ```text
-51 passed, 2 skipped
+53 passed, 2 skipped
 ```
 
 The skipped tests are the optional live MongoDB tests.
