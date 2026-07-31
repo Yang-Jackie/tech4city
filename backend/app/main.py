@@ -17,7 +17,16 @@ from fastapi import (
     status,
 )
 
-from .analyzer import Analyzer, Layer1Analyzer, analyze_message, analyzer_version
+from .analyzer import (
+    Analyzer,
+    Layer1Analyzer,
+    Layer1Layer2Analyzer,
+    Layer1Layer2Layer3Analyzer,
+    Layer2SkippedAnalyzer,
+    Layer3Analyzer,
+    analyze_message,
+    analyzer_version,
+)
 from .config import ConfigurationError, Settings
 from .events import EventConnection, LocalEventBroker
 from .ingestion import IncomingMessageService
@@ -337,11 +346,6 @@ def create_app(
                 detail="message not found",
             )
         job = await active_repository.get_job(key)
-        if job is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="analysis job missing",
-            )
         return MessageReport(
             message=message,
             analysis=await active_repository.get_latest_analysis(key),
@@ -507,6 +511,23 @@ def create_app(
             app.state.telegram_manager.account_id(session_id, require_owner(owner))
         )
 
+    async def owned_selected_telegram_chat(
+        session_id: str, owner: str | None, chat_id: int
+    ) -> int:
+        owner_token = require_owner(owner)
+        account_id = await telegram_action(
+            app.state.telegram_manager.account_id(session_id, owner_token)
+        )
+        selected_chat_id = await telegram_action(
+            app.state.telegram_manager.selected_chat_id(session_id, owner_token)
+        )
+        if chat_id != selected_chat_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Open this Telegram chat before reading its messages",
+            )
+        return account_id
+
     @app.get(
         "/telegram/login/{session_id}/chats",
         response_model=list[TelegramChatSummary],
@@ -554,19 +575,70 @@ def create_app(
         response: Response,
         tech4city_owner: str | None = Cookie(default=None),
     ) -> list[StoredMessage]:
-        account_id = await owned_telegram_account(session_id, tech4city_owner)
-        selected_chat_id = await telegram_action(
-            app.state.telegram_manager.selected_chat_id(
-                session_id, require_owner(tech4city_owner)
-            )
+        account_id = await owned_selected_telegram_chat(
+            session_id, tech4city_owner, chat_id
         )
-        if chat_id != selected_chat_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Open this Telegram chat before reading its messages",
-            )
         response.headers["Cache-Control"] = "no-store"
         return await app.state.repository.list_chat_messages(account_id, chat_id)
+
+    @app.get(
+        "/telegram/login/{session_id}/chats/{chat_id}/reports",
+        response_model=list[MessageReport],
+    )
+    async def list_owned_telegram_reports(
+        session_id: str,
+        chat_id: int,
+        response: Response,
+        tech4city_owner: str | None = Cookie(default=None),
+    ) -> list[MessageReport]:
+        account_id = await owned_selected_telegram_chat(
+            session_id, tech4city_owner, chat_id
+        )
+        messages = await app.state.repository.list_chat_messages(account_id, chat_id)
+
+        async def build_report(message: StoredMessage) -> MessageReport:
+            key = (account_id, chat_id, message.message_id)
+            analysis, job = await asyncio.gather(
+                app.state.repository.get_latest_analysis(key),
+                app.state.repository.get_job(key),
+            )
+            return MessageReport(
+                message=message,
+                analysis=analysis,
+                analysis_job=job,
+            )
+
+        response.headers["Cache-Control"] = "no-store"
+        return await asyncio.gather(*(build_report(message) for message in messages))
+
+    @app.get(
+        "/telegram/login/{session_id}/chats/{chat_id}/messages/{message_id}/report",
+        response_model=MessageReport,
+    )
+    async def get_owned_telegram_chat_report(
+        session_id: str,
+        chat_id: int,
+        message_id: int,
+        response: Response,
+        tech4city_owner: str | None = Cookie(default=None),
+    ) -> MessageReport:
+        account_id = await owned_selected_telegram_chat(
+            session_id, tech4city_owner, chat_id
+        )
+        key = (account_id, chat_id, message_id)
+        message = await app.state.repository.get_message(key)
+        if message is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="message not found",
+            )
+        job = await app.state.repository.get_job(key)
+        response.headers["Cache-Control"] = "no-store"
+        return MessageReport(
+            message=message,
+            analysis=await app.state.repository.get_latest_analysis(key),
+            analysis_job=job,
+        )
 
     @app.get(
         "/telegram/login/{session_id}/messages/{message_id}/report",
@@ -592,11 +664,6 @@ def create_app(
                 detail="message not found",
             )
         job = await app.state.repository.get_job(key)
-        if job is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="analysis job missing",
-            )
         response.headers["Cache-Control"] = "no-store"
         return MessageReport(
             message=message,
@@ -618,10 +685,25 @@ def build_repository(settings: Settings) -> BackendRepository:
 def build_analyzer(settings: Settings) -> Analyzer:
     if settings.analyzer == "fake":
         return analyze_message
-    return Layer1Analyzer(
+    layer3 = Layer3Analyzer(
+        pipeline_version=settings.layer3_pipeline_version,
+        model=settings.layer3_model,
+    )
+    if settings.analyzer == "layer3":
+        return layer3
+    layer1 = Layer1Analyzer(
         pipeline_version=settings.layer1_pipeline_version,
         model_dir=settings.layer1_model_dir,
     )
+    if settings.analyzer == "layer1":
+        return layer1
+    layer2 = Layer2SkippedAnalyzer(
+        pipeline_version=settings.layer2_pipeline_version,
+    )
+    layer1_layer2 = Layer1Layer2Analyzer(layer1, layer2)
+    if settings.analyzer == "layer1-layer2":
+        return layer1_layer2
+    return Layer1Layer2Layer3Analyzer(layer1_layer2, layer3)
 
 
 app = create_app()

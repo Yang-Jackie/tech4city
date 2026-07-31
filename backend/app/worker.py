@@ -3,12 +3,52 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
+import re
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 
 from .analyzer import Analyzer
 from .models import AnalysisJob, AnalysisResult
 from .repository import BackendRepository, MessageKey
+
+logger = logging.getLogger(__name__)
+_SECRET_PATTERN = re.compile(
+    r"(?i)(?:bearer\s+\S+|sk-[A-Za-z0-9_-]+|"
+    r"(?:api[_-]?key|authorization|password|secret|token)\s*[:=]\s*\S+)"
+)
+_MAX_LOGGED_EXCEPTION_LENGTH = 500
+
+
+class _SanitizedAnalyzerError(RuntimeError):
+    """Traceback placeholder that cannot render the original exception unsafely."""
+
+
+def _safe_exception_message(
+    exc: Exception,
+    *,
+    private_values: list[str],
+) -> str:
+    message = str(exc)
+    for value in private_values:
+        if value:
+            message = message.replace(value, "[REDACTED]")
+    for name, value in os.environ.items():
+        if (
+            value
+            and len(value) >= 4
+            and any(
+                marker in name.upper()
+                for marker in ("KEY", "TOKEN", "SECRET", "PASSWORD")
+            )
+        ):
+            message = message.replace(value, "[REDACTED]")
+    message = _SECRET_PATTERN.sub("[REDACTED]", message)
+    message = " ".join(message.split())
+    if not message:
+        return "no exception message"
+    return message[:_MAX_LOGGED_EXCEPTION_LENGTH]
 
 
 class AnalysisWorker:
@@ -46,7 +86,22 @@ class AnalysisWorker:
 
         try:
             analysis = await self._analyzer(message, context)
-        except Exception:
+        except Exception as exc:
+            exception_type = f"{type(exc).__module__}.{type(exc).__qualname__}"
+            safe_message = _safe_exception_message(
+                exc,
+                private_values=[message.text, *(item.text for item in context)],
+            )
+            logged_error = _SanitizedAnalyzerError(f"{exception_type}: {safe_message}")
+            logger.error(
+                "Analyzer failed for analysis job %s",
+                job.job_id,
+                exc_info=(
+                    type(logged_error),
+                    logged_error,
+                    exc.__traceback__,
+                ),
+            )
             failed = await self._repository.fail_job(key, "analysis failed")
             await self._notify(failed, None)
             return failed, None

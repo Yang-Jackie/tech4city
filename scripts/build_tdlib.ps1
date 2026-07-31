@@ -54,8 +54,8 @@ $env:PATH = (Join-Path $Installed "tools\gperf") + ";" + $env:PATH
 cmake --fresh -S $SourceDir -B $BuildDir -G Ninja `
     -DCMAKE_MAKE_PROGRAM:FILEPATH=$Ninja `
     -DCMAKE_BUILD_TYPE=Release `
-    -DCMAKE_INSTALL_PREFIX=$InstallDir `
-    -DCMAKE_TOOLCHAIN_FILE=$Toolchain `
+  "-DCMAKE_INSTALL_PREFIX=$InstallDir" `
+  "-DCMAKE_TOOLCHAIN_FILE=$Toolchain" `
     -DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic `
     -DCCACHE_FOUND:FILEPATH= `
     -DCMAKE_C_COMPILER=gcc `

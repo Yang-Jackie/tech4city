@@ -14,7 +14,7 @@ text messages from that selected chat into the application service.
 | Persist messages and analysis state | Implemented in memory or MongoDB; authenticated MongoDB restart persistence was tested. |
 | Run analysis after ingestion | Implemented with an automatic in-process worker. |
 | Develop and demo without an ML model | Implemented with the deterministic `fake` analyzer. |
-| Invoke the repository's existing Layer 1 classifier | Software integration and local cached-model inference verified; model quality remains ML-owned. |
+| Invoke model-backed layers | Layer 1 is verified; Layer 2 uses an explicit zero-user vector; Layer 3 now has an offline-verified backend contract but no live OpenAI call yet. |
 | Discover stored chats and read conversation/message analysis | Implemented through chat-summary, conversation, and report APIs. |
 | List and select a Telegram chat | Implemented through browser-owned TDLib routes; selection is process-local and not persisted. |
 | Serve a frontend chat interface | Implemented as a responsive chat-discovery viewer with a closable analysis drawer at `/demo/` when running `app.demo:app`. |
@@ -49,7 +49,7 @@ Backend application service [implemented]
    |                                      |
    |                              claim FIFO persisted job
    |                                      |
-   |                         fake analyzer or Layer 1 adapter
+   |                   fake or configurable Layer 1/2/3 pipeline
    |                                      |
    |                         persist versioned result/failure
    v                                      v
@@ -111,11 +111,11 @@ storage replaceable and allows tests to run entirely in memory.
 | `repository.py` | Storage protocol, message identity helpers, and concurrency-safe in-memory implementation. |
 | `mongo_repository.py` | Async MongoDB persistence, indexes, atomic job claims, and document/schema mapping. |
 | `worker.py` | FIFO job execution plus the application-lifecycle runner that wakes and polls automatically. |
-| `analyzer.py` | Injectable analysis interface, deterministic fake adapter, and lazy local Layer 1 adapter. |
+| `analyzer.py` | Injectable analysis interface plus lazy Layer 1, zero-user Layer 2, and conversation-level Layer 3 adapters. |
 | `config.py` | Environment-backed selection of storage, analyzer, worker behavior, model artifact, and pipeline version. |
 
 Dependencies point inward: routes and workers depend on protocols and schemas, while MongoDB and
-Layer 1 are replaceable adapters. Network access and heavyweight model loading do not occur at
+local model layers are replaceable adapters. Network access and heavyweight model loading do not occur at
 module import time.
 
 ## Ingestion Contract
@@ -187,15 +187,20 @@ The analyzer interface is asynchronous and injectable:
 (message, earlier_context) -> AnalysisResult
 ```
 
-Two adapters exist:
+Five runtime modes exist:
 
 - `fake`: deterministic offline behavior for development and tests.
 - `layer1`: lazily loads the existing synchronous classifier, runs inference in a worker thread,
-  and stores raw `status`, `raw_label`,
-ormal_score`, and `bully_score` fields.
+  and stores raw `status`, `raw_label`, `normal_score`, and `bully_score` fields.
+- `layer1-layer2`: runs Layer 1 and then Layer 2, persists both raw outputs, and supplies Layer 2
+  with a 128-value zero user embedding for dataset-independent cold-start inference.
+- `layer3`: sends stored chronological context plus the current message through the existing
+  OpenAI-backed Layer 3 contract without requiring local classifier runtimes.
+- `layer1-layer2-layer3`: preserves both local raw outputs, then adds the validated Layer 3
+  conversation result.
 
-Higher-level `harmful`, `severity`, `categories`, and `explanation` values remain null in Layer 1
-mode until the ML owner approves an explicit mapping. The pipeline version and model artifact path
+Higher-level `harmful`, `severity`, `categories`, and `explanation` values remain null in local
+model modes until an explicit mapping is approved. Pipeline versions and model artifact paths
 are configuration contracts rather than hardcoded runtime assumptions.
 
 Layer 1 is therefore not test-only. The fake analyzer is the offline/test option; Layer 1 is the
@@ -235,12 +240,15 @@ requires both `telegram_account_id` and `chat_id`; together with the path `messa
 the full Telegram message identity. These parameters identify data but are not authorizationâ€”the
 current API is unauthenticated and must not be exposed publicly.
 
-The existing public fields remain available. Layer 1 data is additive under `analysis.layer1`.
+The existing public fields remain available. Model data is additive under `analysis.layer1`,
+`analysis.layer2`, and `analysis.layer3`. Layer 3's already-defined boolean, severity, categories,
+and explanation also populate the corresponding top-level analysis fields. Its confidence is not
+relabeled as bully probability.
 
 ## Runtime Modes
 
 Storage, analysis, and worker implementations are selectable adapters. Memory plus fake analysis
-is the default offline shape; MongoDB provides restart persistence; Layer 1 replaces the analyzer
+is the default offline shape; MongoDB provides restart persistence; local models replace the analyzer
 through the same worker contract. See the [backend reference](backend/README.md#runtime-configuration)
 for the exact configuration surface and the root [operational guide](README.md#optional-integrations)
 for setup.

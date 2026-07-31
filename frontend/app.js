@@ -297,7 +297,7 @@ function showEmptyConversation() {
       "p",
       "",
       usingConnectedTelegram()
-        ? "This chat has no recent text messages that can be analyzed."
+        ? "This chat has no recent text messages to show."
         : "Seed sanitized demo data to populate this conversation.",
     ),
   );
@@ -395,8 +395,34 @@ function scoreRow(label, score) {
 
 function renderAnalysis(report) {
   const { message, analysis, analysis_job: job } = report;
-  const [title, description] = statusDescription(job.status);
   const fragment = document.createDocumentFragment();
+
+  if (!job) {
+    const banner = createElement("section", "status-banner status-banner--pending");
+    const statusCopy = createElement("div", "status-copy");
+    statusCopy.append(
+      createElement("h3", "", "Historical context"),
+      createElement("p", "", "This older message was stored locally and was not queued for analysis."),
+    );
+    banner.append(statusCopy);
+
+    const messageSection = createElement("section", "detail-section");
+    messageSection.append(
+      createElement("h3", "", "Selected message"),
+      createElement("p", "selected-message", message.text),
+    );
+
+    const facts = createElement("dl", "detail-list");
+    facts.append(
+      detailRow("Sender", String(message.sender_id) === state.accountId ? "You" : String(message.sender_id)),
+      detailRow("Sent", formatDateTime(message.sent_at)),
+    );
+    fragment.append(banner, messageSection, facts);
+    analysisContent.replaceChildren(fragment);
+    return;
+  }
+
+  const [title, description] = statusDescription(job.status);
 
   const banner = createElement("section", `status-banner status-banner--${job.status}`);
   const symbol = job.status === "completed" ? "✓" : job.status === "failed" ? "!" : "…";
@@ -437,6 +463,59 @@ function renderAnalysis(report) {
       layerFacts,
       scoreRow("Bully score", analysis.layer1.bully_score),
       scoreRow("Normal score", analysis.layer1.normal_score),
+    );
+    fragment.append(layerSection);
+  }
+
+  if (analysis?.layer2) {
+    const layerSection = createElement("section", "detail-section");
+    const layerFacts = createElement("dl", "detail-list");
+    layerFacts.append(detailRow("Classifier status", analysis.layer2.status));
+    if (analysis.layer2.status === "skipped") {
+      const reasons = {
+        layer1_not_referred: "Layer 1 did not refer this message",
+        real_user_embedding_unavailable: "Real-user embedding unavailable",
+      };
+      layerFacts.append(
+        detailRow(
+          "Reason",
+          reasons[analysis.layer2.skip_reason] || analysis.layer2.skip_reason || "Not available",
+        ),
+      );
+      layerSection.append(createElement("h3", "", "Layer 2 output"), layerFacts);
+    } else {
+      layerFacts.append(
+        detailRow("Raw label", analysis.layer2.raw_label),
+        detailRow("User embedding", analysis.layer2.user_embedding_strategy),
+      );
+      layerSection.append(
+        createElement("h3", "", "Layer 2 output"),
+        layerFacts,
+        scoreRow("Bully score", analysis.layer2.bully_score),
+        scoreRow("Normal score", analysis.layer2.normal_score),
+      );
+    }
+    fragment.append(layerSection);
+  }
+
+  if (analysis?.layer3) {
+    const layerSection = createElement("section", "detail-section");
+    const layerFacts = createElement("dl", "detail-list");
+    const layer3Analysis = analysis.layer3.analysis;
+    const labels = layer3Analysis.categories.map((category) => category.label);
+    layerFacts.append(
+      detailRow("Model", analysis.layer3.model),
+      detailRow("Severity", layer3Analysis.severity),
+      detailRow(
+        "Suspected cyberbullying",
+        layer3Analysis.is_suspected_cyberbullying ? "Yes" : "No",
+      ),
+      detailRow("Categories", labels.length ? labels.join(", ") : "None"),
+    );
+    layerSection.append(
+      createElement("h3", "", "Layer 3 output"),
+      layerFacts,
+      scoreRow("Confidence", layer3Analysis.confidence),
     );
     fragment.append(layerSection);
   }
@@ -501,7 +580,7 @@ async function loadAnalysis(message, { announceError = true } = {}) {
   });
   try {
     const report = await fetchJson(connected
-      ? `/telegram/login/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(message.message_id)}/report`
+      ? `/telegram/login/${encodeURIComponent(sessionId)}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(message.message_id)}/report`
       : `/messages/${encodeURIComponent(message.message_id)}/report?${query}`);
     if (
       requestId === state.analysisRequestId &&
@@ -953,7 +1032,7 @@ function renderTelegramLogin(login) {
     telegramLoginValue.focus();
   } else if (status === "ready") {
     telegramLoginMessage.textContent =
-      `${login.display_name || "Telegram"} is connected. Choose a chat to load and analyze its recent text messages.`;
+      `${login.display_name || "Telegram"} is connected. Choose a chat to load context; only new messages are analyzed.`;
     telegramLoginButton.textContent = "Telegram connected";
     state.telegramSessionId = login.session_id;
     window.localStorage.setItem("tech4cityTelegramSession", login.session_id);

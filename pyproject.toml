@@ -16,6 +16,14 @@ ml = [
     "torch>=2.7,<3",
     "transformers>=4.52,<5",
 ]
+layer2 = [
+    "numpy>=1.26,<3",
+    "sentence-transformers>=3,<6",
+    "torch>=2.7,<3",
+]
+layer3 = [
+    "openai>=1,<3",
+]
 research = [
     "gensim>=4.3,<5",
     "matplotlib>=3.9,<4",

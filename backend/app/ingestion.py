@@ -30,6 +30,10 @@ class IncomingMessageService:
         self._notify_worker = notify_worker or (lambda: None)
         self._notify_event = notify_event
 
+    async def store_history(self, message: MessageCreate) -> tuple[StoredMessage, bool]:
+        """Persist historical context without creating an analysis job."""
+        return await self._repository.ingest_message(message)
+
     async def process(self, message: MessageCreate) -> IngestionResult:
         key = message_key(message)
         stored, created = await self._repository.ingest_message(message)

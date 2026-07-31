@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import logging
 import time
+from pathlib import Path
 
-from app.analyzer import Layer1Analyzer, analyze_message
+from app.analyzer import (
+    Layer1Analyzer,
+    Layer1Layer2Analyzer,
+    Layer2Analyzer,
+    Layer3Analyzer,
+    analyze_message,
+)
 from app.main import create_app as create_backend_app
 from app.repository import InMemoryRepository
 from fastapi.testclient import TestClient
@@ -195,6 +203,8 @@ def test_worker_completes_pending_analysis() -> None:
         "explanation": "Fake analyzer only; no model evaluation was performed.",
         "pipeline_version": "fake-v1",
         "layer1": None,
+        "layer2": None,
+        "layer3": None,
     }
 
 
@@ -224,13 +234,18 @@ def test_worker_processes_jobs_in_ingestion_order() -> None:
     assert second_report.json()["analysis_job"]["status"] == "pending"
 
 
-def test_worker_records_a_safe_failure() -> None:
-    async def failing_analyzer(_message, _context):
-        raise RuntimeError("private provider error")
+def test_worker_records_a_safe_failure(caplog) -> None:
+    async def failing_analyzer(message, _context):
+        raise RuntimeError(
+            f"private provider error for {message.text}; api_key=sk-test-secret"
+        )
 
-    with TestClient(
-        create_app(analyzer=failing_analyzer, worker_enabled=False)
-    ) as client:
+    with (
+        caplog.at_level(logging.ERROR, logger="app.worker"),
+        TestClient(
+            create_app(analyzer=failing_analyzer, worker_enabled=False)
+        ) as client,
+    ):
         client.post("/messages", json=message_payload())
         processed = client.post("/internal/worker/run-once")
         report = client.get(
@@ -248,6 +263,11 @@ def test_worker_records_a_safe_failure() -> None:
         "attempts": 1,
         "error": "analysis failed",
     }
+    assert "builtins.RuntimeError" in caplog.text
+    assert "private provider error" in caplog.text
+    assert "A test message" not in caplog.text
+    assert "sk-test-secret" not in caplog.text
+    assert "[REDACTED]" in caplog.text
 
 
 def test_missing_message_report_returns_not_found() -> None:
@@ -328,5 +348,128 @@ def test_background_worker_persists_layer1_result() -> None:
             "normal_score": 0.25,
             "bully_score": 0.75,
         },
+        "layer2": None,
+        "layer3": None,
     }
     assert layer.calls == ["A test message"]
+
+
+class StubLayer2:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int | None]] = []
+
+    def predict(self, text: str, user_id: int | None) -> dict[str, object]:
+        self.calls.append((text, user_id))
+        return {
+            "status": "normal",
+            "raw_label": "normal",
+            "normal_score": 0.6,
+            "bully_score": 0.4,
+            "user_embedding_strategy": "zero",
+        }
+
+
+def test_background_worker_persists_additive_layer2_result() -> None:
+    layer1 = StubLayer1()
+    layer2 = StubLayer2()
+    analyzer = Layer1Layer2Analyzer(
+        Layer1Analyzer(
+            pipeline_version="layer1-api-test-v1",
+            layer_factory=lambda: layer1,
+        ),
+        Layer2Analyzer(
+            pipeline_version="layer2-api-test-v1",
+            classifier_head_path=Path("unused-test-head.pth"),
+            text_embedding_model="unused-test-encoder",
+            layer_factory=lambda: layer2,
+        ),
+    )
+    with TestClient(create_app(analyzer=analyzer)) as client:
+        client.post("/messages", json=message_payload())
+        deadline = time.monotonic() + 2
+        while True:
+            report = client.get(
+                "/messages/1/report",
+                params={"telegram_account_id": 100, "chat_id": 200},
+            )
+            if report.json()["analysis_job"]["status"] == "completed":
+                break
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+
+    analysis = report.json()["analysis"]
+    assert analysis["pipeline_version"] == ("layer1-api-test-v1+layer2-api-test-v1")
+    assert analysis["layer1"]["bully_score"] == 0.75
+    assert analysis["layer2"] == {
+        "status": "normal",
+        "raw_label": "normal",
+        "normal_score": 0.6,
+        "bully_score": 0.4,
+        "user_embedding_strategy": "zero",
+        "skip_reason": None,
+    }
+    assert layer1.calls == ["A test message"]
+    assert layer2.calls == [("A test message", None)]
+
+
+class StubLayer3:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def explain(self, conversation: dict[str, object]) -> dict[str, object]:
+        self.calls.append(conversation)
+        analysis = {
+            "is_suspected_cyberbullying": False,
+            "confidence": 0.1,
+            "severity": "none",
+            "target_user_ids": [],
+            "suspected_actor_user_ids": [],
+            "categories": [],
+            "evidence": [],
+            "pattern_analysis": {
+                "is_targeted": False,
+                "is_repeated": False,
+                "shows_escalation": False,
+                "has_power_or_group_dynamic": False,
+                "notes": "No harmful pattern.",
+            },
+            "explanation_for_target": "No harmful pattern was identified.",
+            "uncertainty": [],
+            "recommended_next_steps": [],
+        }
+        return {
+            "layer": 3,
+            "explanation": analysis["explanation_for_target"],
+            "analysis": analysis,
+            "model": "layer3-api-test-model",
+        }
+
+
+def test_background_worker_persists_layer3_result() -> None:
+    layer = StubLayer3()
+    analyzer = Layer3Analyzer(
+        pipeline_version="layer3-api-test-v1",
+        model="layer3-api-test-model",
+        layer_factory=lambda: layer,
+    )
+    with TestClient(create_app(analyzer=analyzer)) as client:
+        client.post("/messages", json=message_payload())
+        deadline = time.monotonic() + 2
+        while True:
+            report = client.get(
+                "/messages/1/report",
+                params={"telegram_account_id": 100, "chat_id": 200},
+            )
+            if report.json()["analysis_job"]["status"] == "completed":
+                break
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+
+    analysis = report.json()["analysis"]
+    assert analysis["pipeline_version"] == "layer3-api-test-v1"
+    assert analysis["harmful"] is False
+    assert analysis["bully_probability"] is None
+    assert analysis["explanation"] == "No harmful pattern was identified."
+    assert analysis["layer3"]["model"] == "layer3-api-test-model"
+    assert analysis["layer3"]["analysis"]["severity"] == "none"
+    assert layer.calls[0]["focus_message_id"] == "1"

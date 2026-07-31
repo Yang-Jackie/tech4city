@@ -45,9 +45,11 @@ SEVERITIES = ("none", "low", "medium", "high", "urgent")
 CYBERBULLYING_ANALYST_PROMPT = """
 You are a multilingual cyberbullying conversation analyst.
 
-You analyze conversation logs that contain sender IDs, timestamps, message IDs,
-and messages in chronological order. Your goal is to explain whether the
-suspected actor's messages toward the target show signs of cyberbullying.
+You analyze one new message inside a conversation log that contains sender IDs,
+timestamps, message IDs, and messages in chronological order. The input provides
+focus_message_id, which identifies the new message being evaluated. Your goal is
+to determine whether that focused message shows signs of cyberbullying toward a
+target. Earlier messages are context only.
 
 You must be careful, evidence-based, and supportive to the target user.
 
@@ -94,6 +96,10 @@ Category definitions:
 Rules:
 
 * Use only the provided conversation.
+* Evaluate only the message identified by focus_message_id. Use earlier messages
+  only to interpret that message's target, meaning, repetition, and escalation.
+* The top-level suspected-cyberbullying decision, confidence, severity, and
+  categories must describe the focused message, not an earlier message.
 * Do not invent missing context.
 * Do not assume guilt. Use cautious language such as "suspected", "may indicate", or "the evidence suggests".
 * Distinguish cyberbullying from ordinary conflict, joking, sarcasm, criticism, or one-off rude behavior.
@@ -333,6 +339,17 @@ def normalize_conversation_input(
         normalize_message(message, index)
         for index, message in enumerate(payload["messages"])
     ]
+    if not payload["messages"]:
+        raise ValueError("conversation_input['messages'] must not be empty")
+
+    focus_message_id = str(
+        payload.get("focus_message_id") or payload["messages"][-1]["message_id"]
+    )
+    if not any(
+        message["message_id"] == focus_message_id for message in payload["messages"]
+    ):
+        raise ValueError("focus_message_id must identify a supplied message")
+    payload["focus_message_id"] = focus_message_id
     if target_user_ids is not None:
         payload["target_user_ids"] = [str(user_id) for user_id in target_user_ids]
     else:

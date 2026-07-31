@@ -1,10 +1,11 @@
 # tech4city
 
 Local application for testing Telegram message ingestion and analysis through a FastAPI backend
-and a build-free web interface.
+and a React frontend.
 
-`start_demo.ps1` runs the frontend, backend, analysis worker, WebSocket notifications, and
-browser-managed Telegram support in one process. There is no separate Telegram bridge.
+Use the dedicated [application startup guide](README-APP.md) for the current two-process workflow.
+`start_demo.ps1` starts the backend, analysis worker, WebSocket notifications, and browser-managed
+Telegram support. The current `frontend-preview/` React interface runs separately on port 5174.
 
 ## Prerequisites
 
@@ -156,7 +157,61 @@ analyzer : layer1-roblox-pii-lora-synbullying-v1
 The health endpoint confirms the selected analyzer. The model itself loads lazily when the first
 message is analyzed, which is why the direct smoke test is important.
 
-## Test 3: connect a real Telegram account
+## Test 3: gated Layer 2 placeholder
+
+Complete Test 2 first. The real-user pipeline does not load the current Node2Vec-backed Layer 2
+model because Telegram users have no compatible user embedding.
+
+Set these values in `backend/.env`:
+
+```dotenv
+TECH4CITY_ANALYZER=layer1-layer2
+TECH4CITY_LAYER2_PIPELINE_VERSION=layer2-skipped-real-user-v1
+```
+
+Every new message runs through Layer 1. A `not_cyberbully` result stops downstream analysis. A
+`need_to_investigate` result reaches Layer 2, which records `status: skipped` and
+`skip_reason: real_user_embedding_unavailable` without a score. This is intentional until the ML
+owner provides a real-user cold-start contract.
+
+## Test 4: direct Layer 3 analysis
+
+Layer 3 can run without installing the Layer 1 and Layer 2 model runtimes. Install its client:
+
+```powershell
+py -3.11 -m uv sync --locked --dev --extra layer3 --link-mode=copy
+```
+
+Set the runtime contract and your secret key in the ignored `backend/.env`:
+
+```dotenv
+TECH4CITY_STORAGE=memory
+TECH4CITY_ANALYZER=layer3
+TECH4CITY_LAYER3_MODEL=chatgpt-answer
+TECH4CITY_LAYER3_PIPELINE_VERSION=layer3-chatgpt-answer-v1
+OPENAI_API_KEY=your_openai_api_key
+```
+
+Start the application and use a sanitized message through `POST /messages` or the seed tooling.
+Layer 3 receives the stored chronological context plus an explicit `focus_message_id` for the new
+message. Its decision, severity, categories, and explanation must describe that focused message;
+earlier messages are context only.
+
+For the complete real-user pipeline, install Layer 1 and Layer 3 and change the analyzer mode:
+
+```powershell
+py -3.11 -m uv sync --locked --dev --extra ml --extra layer3 --link-mode=copy
+```
+
+```dotenv
+TECH4CITY_ANALYZER=layer1-layer2-layer3
+```
+
+In this mode, Layer 1 gates the pipeline. Layer 2 records a no-score skipped result. Layer 3 runs
+only for `need_to_investigate` messages and focuses on the new message. OpenAI Structured Outputs
+use `text.format` with the existing strict JSON schema.
+
+## Test 5: connect a real Telegram account
 
 This path uses a TDLib client embedded in `start_demo`. It does not require or start another
 bridge process.
@@ -189,24 +244,28 @@ TDLIB_USE_TEST_DC=false
 
 ### Connect Telegram from the frontend
 
-1. Run `.\scripts\start_demo.ps1`.
-2. Open `http://127.0.0.1:8765/`.
-3. Select **Connect Telegram**.
+1. Run `.\scripts\start_demo.ps1` for the backend.
+2. Start `frontend-preview` by following [README-APP.md](README-APP.md#5-start-the-current-frontend).
+3. Open `http://127.0.0.1:5174/` and select **Connect Telegram**.
 4. Complete the phone, code, and optional two-step-verification prompts.
 5. Choose a chat from the Telegram chat list.
-6. Open the chat to load its latest 100 messages and queue its text messages for analysis.
+6. Open the chat to store its latest 100 text messages as local context.
 7. Send a new text message in that Telegram chat to test live analysis.
 
 Login and chat listing do not import messages. Opening a chat imports its recent text history,
-creates the analysis jobs, and makes that chat the active source for live TDLib
-`updateNewMessage` events. The frontend receives message and analysis updates through the
+stores it without creating analysis jobs, and makes that chat the active source for live TDLib
+`updateNewMessage` events. Only new text events in the active chat are queued for analysis.
+The frontend receives message and analysis updates through the
 application WebSocket. No second process is required.
 
 The active chat selection is process-local and is not written to SQLite or MongoDB. Imported
 messages and analysis results follow `TECH4CITY_STORAGE`: the default `memory` mode is disposable,
 while the optional `mongodb` mode persists them.
 
-Current limitations: only the latest 100 messages are inspected when a chat is opened, only text
+For a privacy-safe Layer 3 smoke test, connect only sanitized conversations and send one new
+sanitized text message after opening its chat.
+
+Current limitations: only the latest 100 messages are stored when a chat is opened, only new text
 messages are analyzed, and sending, edits, deletes, and media analysis are not implemented.
 
 Each browser login uses an isolated encrypted database under `telegram/.tdlib/web`. Do not run two
@@ -254,7 +313,7 @@ Adding `-v` permanently deletes the local database.
 | Command | Type | Purpose |
 |---|---|---|
 | `py -3.11 -m uv sync ...` | One-time or dependency update | Creates or updates `.venv`; stop the application first. |
-| `.\scripts\start_demo.ps1` | Long-running | Starts frontend, backend, worker, WebSocket, and embedded Telegram support. |
+| `.\scripts\start_demo.ps1` | Long-running | Starts the backend, worker, WebSocket, and embedded Telegram support. Start `frontend-preview` separately. |
 | `.\.venv\Scripts\python.exe backend\scripts\seed_demo.py` | One-time | Sends 12 sanitized messages to an already-running backend, waits for analysis, then exits. |
 | `.\.venv\Scripts\python.exe -m telegram.cli` | Interactive diagnostic | Tests TDLib login, chats, history, and Saved Messages independently. |
 | `docker compose ...` | Long-running service | Starts optional persistent MongoDB storage. |
@@ -274,7 +333,7 @@ MongoDB, TDLib network access, or a model:
 Current expected result:
 
 ```text
-53 passed, 2 skipped
+67 passed, 2 skipped
 ```
 
 The skipped tests are the optional live MongoDB tests.
@@ -337,7 +396,8 @@ smoke test first so dependency, token, download, and model errors are visible ou
 
 ## Research utilities
 
-Research and Layer 2 utilities are not required for application testing. Install them separately:
+Other research and training utilities are not required for application testing. Install them
+separately:
 
 ```powershell
 py -3.11 -m uv sync --locked --dev --extra research --link-mode=copy
@@ -347,6 +407,8 @@ Utilities that call OpenAI require `OPENAI_API_KEY` in the ignored root `.env`.
 
 ## Technical documentation
 
+- [Application startup](README-APP.md): current backend, React frontend, Telegram smoke, health,
+  shutdown, and troubleshooting workflow.
 - [Architecture](ARCHITECTURE.md): system design, boundaries, and current limitations.
 - [Backend reference](backend/README.md): configuration, persistence, API contracts, and WebSocket
   events.

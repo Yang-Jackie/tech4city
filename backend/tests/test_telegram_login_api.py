@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 
 import pytest
 from app.analyzer import analyze_message
@@ -236,6 +235,10 @@ def test_connected_chat_routes_require_an_explicit_session_only_selection() -> N
         opened = owner.post("/telegram/login/login-1/chats/999/open")
         messages = owner.get("/telegram/login/login-1/chats/999/messages")
         report = owner.get("/telegram/login/login-1/messages/2/report")
+        qualified_report = owner.get(
+            "/telegram/login/login-1/chats/999/messages/2/report"
+        )
+        reports = owner.get("/telegram/login/login-1/chats/999/reports")
         previous_chat = owner.get("/telegram/login/login-1/chats/123/messages")
 
         with TestClient(make_app()) as stranger:
@@ -248,6 +251,10 @@ def test_connected_chat_routes_require_an_explicit_session_only_selection() -> N
     assert opened.json()["chat_id"] == 999
     assert [message["message_id"] for message in messages.json()] == [2]
     assert report.status_code == 200
+    assert qualified_report.status_code == 200
+    assert qualified_report.json()["message"]["message_id"] == 2
+    assert reports.status_code == 200
+    assert [item["message"]["message_id"] for item in reports.json()] == [2]
     assert previous_chat.status_code == 403
     assert denied.status_code == 401
 
@@ -365,7 +372,7 @@ def test_tdlib_chat_list_exposes_metadata_without_ingesting_messages(tmp_path) -
     assert chats[1]["is_saved_messages"] is True
 
 
-def test_open_chat_imports_only_recent_text_messages_and_keeps_selection_in_memory(
+def test_open_chat_stores_recent_text_as_context_and_keeps_selection_in_memory(
     tmp_path,
 ) -> None:
     ingested: list[MessageCreate] = []
@@ -373,8 +380,11 @@ def test_open_chat_imports_only_recent_text_messages_and_keeps_selection_in_memo
 
     class FakeIngestion:
         async def process(self, message):
+            raise AssertionError("opening history must not queue analysis")
+
+        async def store_history(self, message):
             ingested.append(message)
-            return SimpleNamespace(created=True)
+            return message, True
 
     class FakeClient:
         authorization_state = {"@type": "authorizationStateReady"}

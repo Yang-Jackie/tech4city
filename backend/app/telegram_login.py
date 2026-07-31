@@ -395,14 +395,15 @@ class TelegramSessionManager:
             message_count = 0
             new_message_count = 0
             for message in reversed(history):
-                result = await self._ingest_event(
+                created = await self._ingest_event(
                     session,
                     {"@type": "updateNewMessage", "message": message},
+                    analyze=False,
                 )
-                if result is None:
+                if created is None:
                     continue
                 message_count += 1
-                if result.created:
+                if created:
                     new_message_count += 1
             if previous_chat_id is not None and opened_new_chat:
                 with suppress(TdlibError, TdlibTimeout):
@@ -745,8 +746,12 @@ class TelegramSessionManager:
         session.ingestion_queue = None
 
     async def _ingest_event(
-        self, session: ManagedTelegramSession, event: dict[str, Any]
-    ) -> Any | None:
+        self,
+        session: ManagedTelegramSession,
+        event: dict[str, Any],
+        *,
+        analyze: bool = True,
+    ) -> bool | None:
         if session.telegram_account_id is None:
             return None
         try:
@@ -755,7 +760,12 @@ class TelegramSessionManager:
             return None
         if payload is None or payload["chat_id"] != session.selected_chat_id:
             return None
-        return await self._ingestion_service.process(MessageCreate(**payload))
+        message = MessageCreate(**payload)
+        if analyze:
+            result = await self._ingestion_service.process(message)
+            return bool(getattr(result, "created", False))
+        _, created = await self._ingestion_service.store_history(message)
+        return created
 
     async def _load_chat_history(
         self,
