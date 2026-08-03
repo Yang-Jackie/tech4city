@@ -26,7 +26,20 @@ import {
   type TelegramLoginStatus,
 } from "@/data/telegram-api";
 
-const TELEGRAM_SESSION_KEY = "tech4cityTelegramSession";
+const TELEGRAM_SESSION_KEY = "detectivesTelegramSession";
+const LEGACY_TELEGRAM_SESSION_KEY = "tech4cityTelegramSession";
+
+function restoreTelegramSession(): string | undefined {
+  const sessionId =
+    window.localStorage.getItem(TELEGRAM_SESSION_KEY) ??
+    window.localStorage.getItem(LEGACY_TELEGRAM_SESSION_KEY) ??
+    undefined;
+  if (sessionId) {
+    window.localStorage.setItem(TELEGRAM_SESSION_KEY, sessionId);
+    window.localStorage.removeItem(LEGACY_TELEGRAM_SESSION_KEY);
+  }
+  return sessionId;
+}
 type DataState = "idle" | "loading" | "connected" | "error";
 
 const STATUS_COPY: Record<DataState, string> = {
@@ -38,7 +51,7 @@ const STATUS_COPY: Record<DataState, string> = {
 
 export function App() {
   const savedTelegramSessionId = React.useMemo(
-    () => window.localStorage.getItem(TELEGRAM_SESSION_KEY) ?? undefined,
+    () => restoreTelegramSession(),
     [],
   );
   const [conversations, setConversations] = React.useState<Conversation[]>([]);
@@ -100,6 +113,7 @@ export function App() {
 
   const clearTelegramSession = React.useCallback(() => {
     window.localStorage.removeItem(TELEGRAM_SESSION_KEY);
+    window.localStorage.removeItem(LEGACY_TELEGRAM_SESSION_KEY);
     openedTelegramChatId.current = undefined;
     loadedTelegramChatIds.current.clear();
     setTelegramSessionId(undefined);
@@ -453,7 +467,7 @@ export function App() {
           </span>
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold sm:text-base">
-              Conversation review
+              Detectives
             </p>
           </div>
           <div className="hidden items-center gap-2 text-xs text-muted-foreground md:flex">

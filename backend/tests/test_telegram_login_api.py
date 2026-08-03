@@ -186,6 +186,7 @@ def test_phone_code_password_flow_sets_private_owner_cookie() -> None:
         )
 
     assert created.status_code == 201
+    assert "detectives_owner=" in created.headers["set-cookie"]
     assert "HttpOnly" in created.headers["set-cookie"]
     assert "SameSite=strict" in created.headers["set-cookie"]
     assert created.headers["cache-control"] == "no-store"
@@ -200,6 +201,18 @@ def test_login_session_requires_ownership_cookie() -> None:
         response = client.get("/telegram/login/login-1")
 
     assert response.status_code == 401
+
+
+def test_legacy_owner_cookie_is_migrated() -> None:
+    app = make_app()
+    with TestClient(app) as client:
+        client.cookies.set("tech4city_owner", "legacy-owner")
+        response = client.post("/telegram/login")
+        owner = app.state.telegram_manager.owner
+
+    assert response.status_code == 201
+    assert owner == "legacy-owner"
+    assert "detectives_owner=legacy-owner" in response.headers["set-cookie"]
 
 
 def test_logout_calls_manager_and_returns_terminal_state() -> None:

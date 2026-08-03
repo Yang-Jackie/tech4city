@@ -58,21 +58,26 @@ class Settings:
             fallback_env_path = DEFAULT_REPOSITORY_ENV_PATH
         if fallback_env_path is not None and fallback_env_path != env_path:
             load_dotenv(fallback_env_path, override=False)
-        storage = os.getenv("TECH4CITY_STORAGE", "memory").strip().lower()
+        storage = _runtime_value("DETECTIVES_STORAGE", "memory").strip().lower()
         if storage not in {"memory", "mongodb"}:
             raise ConfigurationError(
-                "TECH4CITY_STORAGE must be either 'memory' or 'mongodb'."
+                "DETECTIVES_STORAGE must be either 'memory' or 'mongodb'."
             )
 
         mongodb_uri = os.getenv("MONGODB_URI", "").strip() or None
-        mongodb_database = os.getenv("MONGODB_DATABASE", "tech4city").strip()
+        legacy_storage_name = (
+            os.getenv("DETECTIVES_STORAGE") is None
+            and os.getenv("TECH4CITY_STORAGE") is not None
+        )
+        default_database = "tech4city" if legacy_storage_name else "detectives"
+        mongodb_database = os.getenv("MONGODB_DATABASE", default_database).strip()
         if not mongodb_database:
             raise ConfigurationError("MONGODB_DATABASE must not be blank.")
         if storage == "mongodb" and mongodb_uri is None:
             raise ConfigurationError(
-                "MONGODB_URI is required when TECH4CITY_STORAGE=mongodb."
+                "MONGODB_URI is required when DETECTIVES_STORAGE=mongodb."
             )
-        analyzer = os.getenv("TECH4CITY_ANALYZER", "fake").strip().lower()
+        analyzer = _runtime_value("DETECTIVES_ANALYZER", "fake").strip().lower()
         if analyzer not in {
             "fake",
             "layer1",
@@ -81,64 +86,66 @@ class Settings:
             "layer1-layer2-layer3",
         }:
             raise ConfigurationError(
-                "TECH4CITY_ANALYZER must be 'fake', 'layer1', 'layer1-layer2', "
+                "DETECTIVES_ANALYZER must be 'fake', 'layer1', 'layer1-layer2', "
                 "'layer3', or 'layer1-layer2-layer3'."
             )
         if "layer3" in analyzer and not os.getenv("OPENAI_API_KEY", "").strip():
             raise ConfigurationError(
-                "OPENAI_API_KEY is required when TECH4CITY_ANALYZER includes Layer 3."
+                "OPENAI_API_KEY is required when DETECTIVES_ANALYZER includes Layer 3."
             )
-        worker_enabled = _read_bool("TECH4CITY_WORKER_ENABLED", default=True)
+        worker_enabled = _read_bool("DETECTIVES_WORKER_ENABLED", default=True)
         worker_poll_seconds = _read_positive_float(
-            "TECH4CITY_WORKER_POLL_SECONDS", default=0.25
+            "DETECTIVES_WORKER_POLL_SECONDS", default=0.25
         )
-        configured_model_dir = os.getenv("TECH4CITY_LAYER1_MODEL_DIR", "").strip()
+        configured_model_dir = _runtime_value("DETECTIVES_LAYER1_MODEL_DIR", "").strip()
         layer1_model_dir = (
             Path(configured_model_dir)
             if configured_model_dir
             else DEFAULT_LAYER1_MODEL_DIR
         )
-        layer1_pipeline_version = os.getenv(
-            "TECH4CITY_LAYER1_PIPELINE_VERSION",
+        layer1_pipeline_version = _runtime_value(
+            "DETECTIVES_LAYER1_PIPELINE_VERSION",
             "layer1-roblox-pii-lora-synbullying-v1",
         ).strip()
         if not layer1_pipeline_version:
             raise ConfigurationError(
-                "TECH4CITY_LAYER1_PIPELINE_VERSION must not be blank."
+                "DETECTIVES_LAYER1_PIPELINE_VERSION must not be blank."
             )
-        configured_layer2_head = os.getenv(
-            "TECH4CITY_LAYER2_CLASSIFIER_HEAD_PATH", ""
+        configured_layer2_head = _runtime_value(
+            "DETECTIVES_LAYER2_CLASSIFIER_HEAD_PATH", ""
         ).strip()
         layer2_classifier_head_path = (
             Path(configured_layer2_head)
             if configured_layer2_head
             else DEFAULT_LAYER2_CLASSIFIER_HEAD_PATH
         )
-        layer2_text_embedding_model = os.getenv(
-            "TECH4CITY_LAYER2_TEXT_EMBEDDING_MODEL",
+        layer2_text_embedding_model = _runtime_value(
+            "DETECTIVES_LAYER2_TEXT_EMBEDDING_MODEL",
             "google/embeddinggemma-300m",
         ).strip()
         if not layer2_text_embedding_model:
             raise ConfigurationError(
-                "TECH4CITY_LAYER2_TEXT_EMBEDDING_MODEL must not be blank."
+                "DETECTIVES_LAYER2_TEXT_EMBEDDING_MODEL must not be blank."
             )
-        layer2_pipeline_version = os.getenv(
-            "TECH4CITY_LAYER2_PIPELINE_VERSION",
+        layer2_pipeline_version = _runtime_value(
+            "DETECTIVES_LAYER2_PIPELINE_VERSION",
             "layer2-skipped-real-user-v1",
         ).strip()
         if not layer2_pipeline_version:
             raise ConfigurationError(
-                "TECH4CITY_LAYER2_PIPELINE_VERSION must not be blank."
+                "DETECTIVES_LAYER2_PIPELINE_VERSION must not be blank."
             )
-        layer3_model = os.getenv("TECH4CITY_LAYER3_MODEL", "chatgpt-answer").strip()
+        layer3_model = _runtime_value(
+            "DETECTIVES_LAYER3_MODEL", "chatgpt-answer"
+        ).strip()
         if not layer3_model:
-            raise ConfigurationError("TECH4CITY_LAYER3_MODEL must not be blank.")
-        layer3_pipeline_version = os.getenv(
-            "TECH4CITY_LAYER3_PIPELINE_VERSION", "layer3-chatgpt-answer-v1"
+            raise ConfigurationError("DETECTIVES_LAYER3_MODEL must not be blank.")
+        layer3_pipeline_version = _runtime_value(
+            "DETECTIVES_LAYER3_PIPELINE_VERSION", "layer3-chatgpt-answer-v1"
         ).strip()
         if not layer3_pipeline_version:
             raise ConfigurationError(
-                "TECH4CITY_LAYER3_PIPELINE_VERSION must not be blank."
+                "DETECTIVES_LAYER3_PIPELINE_VERSION must not be blank."
             )
 
         return cls(
@@ -159,7 +166,7 @@ class Settings:
 
 
 def _read_bool(name: str, *, default: bool) -> bool:
-    raw_value = os.getenv(name)
+    raw_value = _runtime_value(name)
     if raw_value is None:
         return default
     value = raw_value.strip().lower()
@@ -171,7 +178,7 @@ def _read_bool(name: str, *, default: bool) -> bool:
 
 
 def _read_positive_float(name: str, *, default: float) -> float:
-    raw_value = os.getenv(name)
+    raw_value = _runtime_value(name)
     if raw_value is None:
         return default
     try:
@@ -181,3 +188,12 @@ def _read_positive_float(name: str, *, default: float) -> float:
     if value <= 0:
         raise ConfigurationError(f"{name} must be greater than zero.")
     return value
+
+
+def _runtime_value(name: str, default: str | None = None) -> str | None:
+    """Read a Detectives setting with a Tech4City compatibility fallback."""
+    value = os.getenv(name)
+    if value is None and name.startswith("DETECTIVES_"):
+        legacy_name = name.replace("DETECTIVES_", "TECH4CITY_", 1)
+        value = os.getenv(legacy_name)
+    return default if value is None else value

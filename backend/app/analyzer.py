@@ -79,7 +79,7 @@ class Layer1Analyzer:
     def _build_layer(self) -> Any:
         source_path = Path(__file__).resolve().parents[2] / "Layer" / "Layer1.py"
         spec = importlib.util.spec_from_file_location(
-            "_tech4city_layer1_adapter", source_path
+            "_detectives_layer1_adapter", source_path
         )
         if spec is None or spec.loader is None:
             raise RuntimeError(f"Unable to load Layer 1 from {source_path}")
@@ -141,7 +141,7 @@ class Layer2Analyzer:
     def _build_layer(self) -> Any:
         source_path = Path(__file__).resolve().parents[2] / "Layer" / "Layer2.py"
         spec = importlib.util.spec_from_file_location(
-            "_tech4city_layer2_adapter", source_path
+            "_detectives_layer2_adapter", source_path
         )
         if spec is None or spec.loader is None:
             raise RuntimeError(f"Unable to load Layer 2 from {source_path}")
@@ -271,7 +271,7 @@ class Layer3Analyzer:
     def _build_layer(self) -> Any:
         source_path = Path(__file__).resolve().parents[2] / "Layer" / "Layer3.py"
         spec = importlib.util.spec_from_file_location(
-            "_tech4city_layer3_adapter", source_path
+            "_detectives_layer3_adapter", source_path
         )
         if spec is None or spec.loader is None:
             raise RuntimeError(f"Unable to load Layer 3 from {source_path}")

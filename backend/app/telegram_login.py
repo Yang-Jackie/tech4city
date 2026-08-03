@@ -638,7 +638,7 @@ class TelegramSessionManager:
                     "api_id": config.api_id,
                     "api_hash": config.api_hash,
                     "system_language_code": "en",
-                    "device_model": "Tech4City web",
+                    "device_model": "Detectives web",
                     "system_version": "Windows",
                     "application_version": "0.5.0",
                 }
@@ -877,6 +877,6 @@ class TelegramSessionManager:
         if "can't lock file" in safe.lower():
             return (
                 "This Telegram session is already open in another application "
-                "process. Stop other tech4city instances and try again."
+                "process. Stop other Detectives instances and try again."
             )
         return safe[:240] or "Telegram rejected the request."

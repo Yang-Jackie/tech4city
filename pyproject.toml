@@ -1,7 +1,7 @@
 [project]
-name = "tech4city"
+name = "detectives"
 version = "0.1.0"
-description = "Local tech4city application, browser-managed Telegram client, and research utilities"
+description = "Detectives cyberbullying analysis app for the Tech4City hackathon"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.139,<1",

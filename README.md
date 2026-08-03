@@ -1,230 +1,170 @@
-# tech4city
+<div align="center">
 
-Local application for testing Telegram message ingestion and analysis through a FastAPI backend
-and a React frontend.
+# Detectives
 
-Use the dedicated [application startup guide](README-APP.md) for the current two-process workflow.
-`start_demo.ps1` starts the backend, analysis worker, WebSocket notifications, and browser-managed
-Telegram support. The `frontend/` React interface runs separately on port 5174 during development.
+An adaptable cyberbullying-analysis brain for online conversations.
 
-## Prerequisites
+Detectives turns chat context into review signals, focused explanations, and actionable
+insight.
 
-The supported local workflow uses 64-bit Windows and PowerShell.
+[How it works](#how-it-works) · [Features](#features) · [Quick start](#quick-start) · [Full pipeline](#run-the-full-analysis-pipeline) · [Architecture](#architecture) · [Privacy](#privacy-and-safety)
 
-- Git
-- Python 3.11
-- PowerShell 5.1 or newer
-- Docker Desktop only for the optional MongoDB test
-- Node.js only for the optional frontend syntax check
+![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.139+-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.7+-EE4C2C?logo=pytorch&logoColor=white)
+![Current adapter](https://img.shields.io/badge/Current_adapter-Telegram%2FTDLib-26A5E4?logo=telegram&logoColor=white)
 
-Real Telegram testing also requires the native tools in the
-[TDLib guide](README-TDLIB.md#prerequisites).
+**Built as a submission for the Tech4City hackathon**
 
-## First-time setup
+</div>
 
-Run all commands from the repository root:
+---
+
+## Why Detectives
+
+Cyberbullying rarely fits into one obvious keyword. A harmful message can depend on who said it,
+what came before it, and whether it forms part of a targeted pattern. At the same time, a rude or
+sarcastic message is not automatically cyberbullying.
+
+Detectives is the analysis brain behind that workflow, not a Telegram-specific product. It is
+designed to receive normalized messages through platform adapters, analyze them through explicit
+software contracts, and return versioned results that a connected product can store, display, or
+act on.
+
+The current Tech4City prototype uses Telegram through TDLib as its first reference adapter. Future
+adapters can translate other chat platforms into a shared conversation contract while leaving the
+core analysis layers intact. Detectives supports human review; it does not claim to replace
+safeguarding judgment.
+
+---
+
+## How it works
+
+```text
+Chat platform
+(Telegram through TDLib today)
+            ↓
+Platform adapter
+            ↓
+Normalized conversation contract
+            ↓
+Detectives analysis brain
+            ↓
+Layer 1 gate → Layer 2 contract → focused Layer 3 review
+            ↓
+Versioned result API
+            ↓
+Review interface or another consuming product
+```
+
+| Stage | What happens |
+|---|---|
+| **Adapt** | Each platform adapter converts provider-specific identities, chats, and events into the conversation contract consumed by Detectives. |
+| **Collect** | The current Telegram adapter lists recent chats and imports up to 100 text messages from the selected chat as context. |
+| **Observe** | New messages supplied by the active adapter enter the analysis queue. |
+| **Analyze** | Layer 1 gates further investigation; the current real-user Layer 2 contract records an explicit no-score skip; Layer 3 evaluates the new message with earlier messages as context. |
+| **Persist** | Jobs and versioned results use either disposable memory storage or MongoDB. |
+| **Review** | The frontend shows completed safe and concerning results without exposing internal pipeline stages. |
+
+Model behavior—including prompts, thresholds, label semantics, and quality acceptance—remains a
+versioned ML contract. The application code validates, stores, and displays those outputs without
+silently redefining them.
+
+---
+
+## Features
+
+| Area | Capability |
+|---|---|
+| **Analysis brain** | Consumes normalized conversations and returns versioned, platform-independent analysis results. |
+| **Adapter boundary** | Keeps platform authorization, identity, and event formats outside the core analysis pipeline. |
+| **Current Telegram adapter** | Browser-managed phone, code, and two-step-verification login using TDLib. |
+| **Read-only reference workflow** | Lists chats and reads text messages without sending, editing, or deleting Telegram content. |
+| **Context-aware review** | Keeps earlier chronological messages as context while focusing the decision on the new message. |
+| **Layered analysis** | Injectable fake, local Hugging Face Layer 1, gated Layer 1/2, direct Layer 3, and combined Layer 1/2/3 modes. |
+| **Asynchronous processing** | Idempotent ingestion, queued jobs, an automatic worker, and explicit pending, processing, completed, and failed states. |
+| **Live updates** | REST snapshots plus single-process WebSocket events for adapter, message, and analysis changes. |
+| **Reviewer interface** | Responsive React conversation list, message states, flagged-message filtering, and a detailed analysis sheet. |
+| **Persistence options** | Fast offline memory mode or MongoDB with message identity and analysis lookup indexes. |
+| **Offline verification** | Injectable model boundaries and sanitized fixtures keep the core test suite independent of Telegram, MongoDB, and model downloads. |
+
+### Current scope
+
+- Telegram is the only implemented platform adapter today; support for other chat platforms is the intended evolution, not a current capability.
+- The analysis layers and versioned result boundary are isolated from TDLib. Each future adapter must supply its own authorization, normalization, identity, and event-delivery behavior.
+- The current backend message identity still uses Telegram-named fields and must be generalized as part of adding the next platform adapter.
+- In the current Telegram adapter, opening a chat stores its latest 100 text messages as context and only new text messages in the selected chat are analyzed.
+- Media, edits, deletions, secret chats, and outbound actions are not implemented in the current adapter.
+- Layer 2 is deliberately skipped for real users until the ML owner approves a cold-start and feature contract.
+- The backend is a local hackathon application and must not be exposed publicly without authentication, tenant isolation, retention controls, and production deployment hardening.
+
+---
+
+## Quick start
+
+The supported full application workflow uses 64-bit Windows and PowerShell. The offline backend
+test requires Python 3.11; the interface additionally requires Node.js 20.19+ or 22.12+.
+
+### 1. Install the project
+
+From the repository root:
 
 ```powershell
-py -3.11 --version
 py -3.11 -m pip install --user "uv>=0.11,<1"
 py -3.11 -m uv sync --locked --dev --link-mode=copy
+
+Push-Location frontend
+npm ci
+Pop-Location
 ```
 
-This creates `.venv` and installs the local project.
+### 2. Configure the offline analyzer
 
-## Test 1: fastest local test
+Create the ignored backend configuration:
 
-This is the recommended first test. It uses memory storage and a deterministic fake analyzer. It does not require Docker, TDLib, Telegram credentials, a model, or an API key.
+```powershell
+if (-not (Test-Path backend\.env)) {
+    Copy-Item backend\.env.example backend\.env
+}
+```
 
-Create the backend configuration if necessary. Confirm these values in `backend/.env`:
+Use the deterministic offline mode in `backend/.env`:
 
 ```dotenv
-TECH4CITY_STORAGE=memory
-TECH4CITY_ANALYZER=fake
-TECH4CITY_WORKER_ENABLED=true
-TECH4CITY_WORKER_POLL_SECONDS=0.25
+DETECTIVES_STORAGE=memory
+DETECTIVES_ANALYZER=fake
+DETECTIVES_WORKER_ENABLED=true
+DETECTIVES_WORKER_POLL_SECONDS=0.25
 ```
 
-### Terminal 1: start the application
+### 3. Start the backend
 
 ```powershell
 .\scripts\start_demo.ps1
 ```
 
-Expected startup:
+The API runs at <http://127.0.0.1:8765>. OpenAPI documentation is available at
+<http://127.0.0.1:8765/docs>.
 
-```text
-Application startup complete.
-Uvicorn running on http://127.0.0.1:8765
-```
+### 4. Start the frontend
 
-Open `http://127.0.0.1:8765/`.
-
-### Terminal 2: add sample conversations
+In a second terminal:
 
 ```powershell
-.\.venv\Scripts\python.exe backend\scripts\seed_demo.py
+Set-Location frontend
+npm run dev -- --host 127.0.0.1 --port 5174 --strictPort
 ```
 
-Expected result:
+Open <http://127.0.0.1:5174>. The first-use screen explains how to connect Telegram. Telegram
+login itself requires the native TDLib setup and credentials described below.
 
-```text
-Backend ready: storage=memory analyzer=fake-v1
-Seeded 12 sanitized messages across 4 chats.
-All analysis jobs completed.
-```
+---
 
-Open the URL printed by the command. The sample account ID is `900001`.
+## Connect Telegram
 
-Memory storage is disposable: messages and results disappear when Terminal 1 stops.
-
-## Test 2: Layer 1 analysis
-
-Complete Test 1 first. Stop the application with Ctrl+C before installing the ML dependencies.
-
-### Install the ML extra
-
-```powershell
-py -3.11 -m uv sync --locked --dev --extra ml --link-mode=copy
-```
-
-Confirm that the packages are installed without importing the full ML stack:
-
-```powershell
-.\.venv\Scripts\python.exe -c "import importlib.util as u; print({n: bool(u.find_spec(n)) for n in ('peft', 'torch', 'transformers')})"
-```
-
-All three values should be `True`.
-
-### Configure Layer 1
-
-Set these values in `backend/.env`:
-
-```dotenv
-TECH4CITY_STORAGE=memory
-TECH4CITY_ANALYZER=layer1
-TECH4CITY_LAYER1_MODEL_DIR=Layer/cyberbully-roblox-pii-lora-synbullying/best_model
-TECH4CITY_LAYER1_PIPELINE_VERSION=layer1-roblox-pii-lora-synbullying-v1
-```
-
-The tracked files are a PEFT/LoRA adapter for the gated
-`Roblox/roblox-pii-classifier` base model. If the base model is not already cached, obtain access
-from its owner and add this only to the ignored `backend/.env`:
-
-```dotenv
-HF_TOKEN=your_approved_huggingface_token
-```
-
-Never commit the token.
-
-### Test the model before starting the application
-
-Use the backend adapter for the smoke test. Do not use `from Layer.Layer1 import Layer1`, because
-the `Layer` package currently imports Layer 2 and its separate research dependencies.
-
-```powershell
-.\.venv\Scripts\python.exe -c "import asyncio; from pathlib import Path; from dotenv import load_dotenv; load_dotenv('backend/.env'); from app.analyzer import Layer1Analyzer; from app.models import MessageCreate; analyzer=Layer1Analyzer(pipeline_version='smoke-test', model_dir=Path(r'Layer\cyberbully-roblox-pii-lora-synbullying\best_model').resolve()); message=MessageCreate(telegram_account_id=1, chat_id=1, message_id=1, sender_id=1, text='This is a neutral test message.', sent_at='2026-07-28T00:00:00Z'); print(asyncio.run(analyzer(message, [])).model_dump())"
-```
-
-The first run may download the base model and initialize CUDA. Continue only after it prints a
-result containing `status`, `raw_label`, `normal_score`, and `bully_score`.
-
-### Run the application and seed data
-
-Terminal 1:
-
-```powershell
-.\scripts\start_demo.ps1
-```
-
-Terminal 2:
-
-```powershell
-.\.venv\Scripts\python.exe backend\scripts\seed_demo.py
-```
-
-Expected health configuration:
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8765/health
-```
-
-```text
-storage  : memory
-analyzer : layer1-roblox-pii-lora-synbullying-v1
-```
-
-The health endpoint confirms the selected analyzer. The model itself loads lazily when the first
-message is analyzed, which is why the direct smoke test is important.
-
-## Test 3: gated Layer 2 placeholder
-
-Complete Test 2 first. The real-user pipeline does not load the current Node2Vec-backed Layer 2
-model because Telegram users have no compatible user embedding.
-
-Set these values in `backend/.env`:
-
-```dotenv
-TECH4CITY_ANALYZER=layer1-layer2
-TECH4CITY_LAYER2_PIPELINE_VERSION=layer2-skipped-real-user-v1
-```
-
-Every new message runs through Layer 1. A `not_cyberbully` result stops downstream analysis. A
-`need_to_investigate` result reaches Layer 2, which records `status: skipped` and
-`skip_reason: real_user_embedding_unavailable` without a score. This is intentional until the ML
-owner provides a real-user cold-start contract.
-
-## Test 4: direct Layer 3 analysis
-
-Layer 3 can run without installing the Layer 1 and Layer 2 model runtimes. Install its client:
-
-```powershell
-py -3.11 -m uv sync --locked --dev --extra layer3 --link-mode=copy
-```
-
-Set the runtime contract and your secret key in the ignored `backend/.env`:
-
-```dotenv
-TECH4CITY_STORAGE=memory
-TECH4CITY_ANALYZER=layer3
-TECH4CITY_LAYER3_MODEL=chatgpt-answer
-TECH4CITY_LAYER3_PIPELINE_VERSION=layer3-chatgpt-answer-v1
-OPENAI_API_KEY=your_openai_api_key
-```
-
-Start the application and use a sanitized message through `POST /messages` or the seed tooling.
-Layer 3 receives the stored chronological context plus an explicit `focus_message_id` for the new
-message. Its decision, severity, categories, and explanation must describe that focused message;
-earlier messages are context only.
-
-For the complete real-user pipeline, install Layer 1 and Layer 3 and change the analyzer mode:
-
-```powershell
-py -3.11 -m uv sync --locked --dev --extra ml --extra layer3 --link-mode=copy
-```
-
-```dotenv
-TECH4CITY_ANALYZER=layer1-layer2-layer3
-```
-
-In this mode, Layer 1 gates the pipeline. Layer 2 records a no-score skipped result. Layer 3 runs
-only for `need_to_investigate` messages and focuses on the new message. OpenAI Structured Outputs
-use `text.format` with the existing strict JSON schema.
-
-## Test 5: connect a real Telegram account
-
-This path uses a TDLib client embedded in `start_demo`. It does not require or start another
-bridge process.
-
-### Prepare TDLib
-
-Follow [README-TDLIB.md](README-TDLIB.md) to:
-
-1. Install the native build prerequisites.
-2. Build `tdjson.dll`.
-3. Obtain `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`.
-
-Create the root configuration if necessary:
+Follow the complete [TDLib guide](README-TDLIB.md) to build `tdjson.dll` and obtain
+`TELEGRAM_API_ID` and `TELEGRAM_API_HASH`. Then copy the root example:
 
 ```powershell
 if (-not (Test-Path .env)) {
@@ -232,7 +172,7 @@ if (-not (Test-Path .env)) {
 }
 ```
 
-Set the credentials in the ignored root `.env`:
+Set the ignored root `.env`:
 
 ```dotenv
 TELEGRAM_API_ID=your_api_id
@@ -242,175 +182,188 @@ TDLIB_DATABASE_ENCRYPTION_KEY=
 TDLIB_USE_TEST_DC=false
 ```
 
-### Connect Telegram from the frontend
+Start both processes, select **Connect Telegram**, complete Telegram authorization, and choose a
+chat. Detectives imports recent text as context and queues only new text messages received after
+that chat is opened.
 
-1. Run `.\scripts\start_demo.ps1` for the backend.
-2. Start `frontend` by following [README-APP.md](README-APP.md#5-start-the-current-frontend).
-3. Open `http://127.0.0.1:5174/` and select **Connect Telegram**.
-4. Complete the phone, code, and optional two-step-verification prompts.
-5. Choose a chat from the Telegram chat list.
-6. Open the chat to store its latest 100 text messages as local context.
-7. Send a new text message in that Telegram chat to test live analysis.
+Browser-managed TDLib databases are isolated under the ignored `telegram/.tdlib/web/` directory.
+Use the frontend logout action when you intend to revoke and remove a local session.
 
-Login and chat listing do not import messages. Opening a chat imports its recent text history,
-stores it without creating analysis jobs, and makes that chat the active source for live TDLib
-`updateNewMessage` events. Only new text events in the active chat are queued for analysis.
-The frontend receives message and analysis updates through the
-application WebSocket. No second process is required.
+---
 
-The active chat selection is process-local and is not written to SQLite or MongoDB. Imported
-messages and analysis results follow `TECH4CITY_STORAGE`: the default `memory` mode is disposable,
-while the optional `mongodb` mode persists them.
+## Run the full analysis pipeline
 
-For a privacy-safe Layer 3 smoke test, connect only sanitized conversations and send one new
-sanitized text message after opening its chat.
+Install the local classifier and Layer 3 dependencies:
 
-Current limitations: only the latest 100 messages are stored when a chat is opened, only new text
-messages are analyzed, and sending, edits, deletes, and media analysis are not implemented.
+```powershell
+py -3.11 -m uv sync --locked --dev --extra ml --extra layer3 --link-mode=copy
+```
 
-Each browser login uses an isolated encrypted database under `telegram/.tdlib/web`. Do not run two
-application processes against the same database. **Log out** through the frontend when you intend
-to revoke and remove that local session.
+Configure the approved integration contracts in `backend/.env`:
 
-## Optional integrations
+```dotenv
+DETECTIVES_STORAGE=memory
+DETECTIVES_ANALYZER=layer1-layer2-layer3
+DETECTIVES_WORKER_ENABLED=true
+DETECTIVES_WORKER_POLL_SECONDS=0.25
 
-### Test MongoDB persistence
+DETECTIVES_LAYER1_MODEL_DIR=Layer/cyberbully-roblox-pii-lora-synbullying/best_model
+DETECTIVES_LAYER1_PIPELINE_VERSION=layer1-roblox-pii-lora-synbullying-v1
+DETECTIVES_LAYER2_PIPELINE_VERSION=layer2-skipped-real-user-v1
+DETECTIVES_LAYER3_MODEL=chatgpt-answer
+DETECTIVES_LAYER3_PIPELINE_VERSION=layer3-chatgpt-answer-v1
 
-Use MongoDB when messages and analysis results must survive an application restart.
+HF_TOKEN=your_approved_huggingface_token
+OPENAI_API_KEY=your_openai_api_key
+```
 
-1. Start Docker Desktop.
-2. Copy `backend/.env.example` to `backend/.env` if necessary.
-3. Uncomment the MongoDB block.
-4. Replace both password placeholders with the same URL-safe development password.
-5. Keep either `TECH4CITY_ANALYZER=fake` or `TECH4CITY_ANALYZER=layer1`.
+The tracked Layer 1 adapter references a gated Hugging Face base model. Obtain access from its
+owner before using `HF_TOKEN`. Never commit either token. The first Layer 1 request loads the model
+lazily and can take substantially longer than later requests.
 
-Start MongoDB:
+The former `TECH4CITY_*` environment variables remain lower-priority compatibility aliases for
+existing local setups. New configuration should use `DETECTIVES_*`.
+
+For focused setup, runtime, shutdown, and troubleshooting instructions, use the
+[application guide](README-APP.md).
+
+---
+
+## Optional MongoDB persistence
+
+Memory mode loses messages, jobs, and results when the backend stops. To use the authenticated
+local MongoDB service:
+
+1. Copy `backend/.env.example` to `backend/.env`.
+2. Uncomment the MongoDB block and replace both password placeholders with the same URL-safe local password.
+3. Set `DETECTIVES_STORAGE=mongodb`.
+4. Start Docker Desktop and run:
 
 ```powershell
 docker compose -f backend\compose.yaml up -d
-docker compose -f backend\compose.yaml ps
-```
-
-Then run the application normally:
-
-```powershell
 .\scripts\start_demo.ps1
 ```
 
-The health endpoint should report `"storage": "mongodb"`.
+`docker compose -f backend\compose.yaml down` removes the container but retains the named volume.
+Adding `-v` permanently deletes that local database.
 
-Stop MongoDB without deleting data:
+---
 
-```powershell
-docker compose -f backend\compose.yaml stop
+## Architecture
+
+Detectives keeps model behavior behind an injectable analyzer contract and storage behind a
+repository protocol. Its target platform boundary is an adapter that supplies normalized
+conversation events to the same analysis brain.
+
+```text
+Target adapter shape
+
+Platform adapters → normalized messages → queue → Detectives analysis brain
+                                                    ↓
+                                      versioned findings and reports
+                                                    ↓
+                                        any authorized consumer
 ```
 
-`docker compose -f backend\compose.yaml down` removes the container but keeps the named volume.
-Adding `-v` permanently deletes the local database.
+```text
+Detectives/
+├── Layer/                 # Public Layer API and ML adapters
+├── backend/
+│   ├── app/
+│   │   ├── main.py        # FastAPI routes and lifecycle
+│   │   ├── ingestion.py   # Idempotent message application service
+│   │   ├── analyzer.py    # Injectable Layer 1/2/3 integration
+│   │   ├── worker.py      # Queue processing and lifecycle runner
+│   │   ├── repository.py  # Storage protocol and memory implementation
+│   │   └── telegram_login.py
+│   └── tests/
+├── frontend/              # React, TypeScript, Vite, and Tailwind UI
+├── telegram/              # Current TDLib platform adapter
+├── utils/                 # Research and data-preparation utilities
+└── data/                  # Existing research artifacts and derived datasets
+```
 
-## What each command does
+The public `Layer` methods and returned fields remain backward compatible. Application adapters
+load heavyweight model dependencies lazily, so module import and offline tests do not require a
+network connection or model initialization.
 
-| Command | Type | Purpose |
+See [ARCHITECTURE.md](ARCHITECTURE.md) for component boundaries, persistence, event flow, and the
+current unsupported cases.
+
+---
+
+## API overview
+
+| Method | Path | Purpose |
 |---|---|---|
-| `py -3.11 -m uv sync ...` | One-time or dependency update | Creates or updates `.venv`; stop the application first. |
-| `.\scripts\start_demo.ps1` | Long-running | Starts the backend, worker, WebSocket, and embedded Telegram support. Start the React frontend separately for development. |
-| `.\.venv\Scripts\python.exe backend\scripts\seed_demo.py` | One-time | Sends 12 sanitized messages to an already-running backend, waits for analysis, then exits. |
-| `.\.venv\Scripts\python.exe -m telegram.cli` | Interactive diagnostic | Tests TDLib login, chats, history, and Saved Messages independently. |
-| `docker compose ...` | Long-running service | Starts optional persistent MongoDB storage. |
+| `GET` | `/health` | Report storage and analyzer readiness. |
+| `POST` | `/messages` | Validate, deduplicate, store, and queue a normalized text message. |
+| `GET` | `/chats` | List stored chats for a connected account. |
+| `GET` | `/chats/{chat_id}/messages` | Read a stored conversation. |
+| `GET` | `/messages/{message_id}/report` | Read the latest versioned result and job state. |
+| `POST` | `/telegram/login` | Start an isolated browser-owned Telegram login. |
+| `GET` | `/telegram/login/{session_id}/chats` | List chats owned by the browser session. |
+| `POST` | `/telegram/login/{session_id}/chats/{chat_id}/open` | Select a chat and import recent text as context. |
+| `GET` | `/ws` | Upgrade to the local WebSocket event channel. |
 
-`seed_demo.py` does not start the application. `start_demo.ps1` does not create sample messages.
+The internal worker hook exists only for compatibility and debugging; it is unauthenticated and
+must not be exposed publicly.
 
-## Verify
+---
 
-Stop the application before changing dependencies. The offline verification does not require
-MongoDB, TDLib network access, or a model:
+## Testing
+
+The default verification path is offline and uses sanitized fixtures:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -p no:cacheprovider
 .\.venv\Scripts\ruff.exe check backend
+
+Push-Location frontend
+npm run typecheck
+npm run lint
+npm run build
+Pop-Location
+
+git diff --check
 ```
 
-Current expected result:
+Optional live MongoDB tests require `MONGODB_TEST_URI`. Real Telegram and model-backed smoke tests
+require their respective credentials and approved artifacts; they are not evidence of model
+quality or safety.
 
-```text
-67 passed, 2 skipped
-```
+---
 
-The skipped tests are the optional live MongoDB tests.
+## Privacy and safety
 
-If Node.js is installed:
+The Detectives analysis brain is platform-independent; data handling ultimately depends on the
+adapter and consuming product around it. The current Telegram adapter requests read-only access
+and does not send, edit, or delete Telegram messages. The prototype stores message text locally in
+memory or in the configured MongoDB database. Browser-managed Telegram session databases and
+credentials remain in ignored local paths and environment files.
 
-```powershell
-node --check frontend\app.js
-```
+When Layer 3 is enabled, the focused message and stored conversation context are sent to the
+configured OpenAI model. Connect only accounts and conversations you are authorized to process,
+and use sanitized content for development and demonstrations.
 
-To include the live MongoDB repository test while MongoDB is running:
+Do not commit API keys, Telegram credentials, TDLib session data, raw private conversations, or
+personally identifying fixtures. Detectives surfaces model output for review and does not present
+unverified accuracy, safety, or efficacy claims.
 
-```powershell
-$env:MONGODB_TEST_URI = (Get-Content backend\.env | Select-String '^MONGODB_URI=').Line.Split('=', 2)[1]
-.\.venv\Scripts\python.exe -m pytest backend\tests\test_mongo_repository.py -v
-Remove-Item Env:MONGODB_TEST_URI
-```
+---
 
-## Common problems
+## Documentation
 
-### `uv sync` reports `Access is denied`
+- [Application guide](README-APP.md) — complete local startup, verification, shutdown, and troubleshooting.
+- [Architecture](ARCHITECTURE.md) — backend boundaries, runtime flow, storage, and limitations.
+- [Backend reference](backend/README.md) — environment, persistence, endpoints, and result contracts.
+- [TDLib guide](README-TDLIB.md) — native build, Telegram credentials, diagnostics, and security.
+- [Frontend reference](frontend/README.md) — React development, production build, and frontend contracts.
 
-A running Python process is using `.venv`. Stop `start_demo`, tests, and Python shells before
-retrying. If necessary, delete only `.venv` and recreate it with the first-time setup command.
-Do not delete `.env`, `backend/.env`, `telegram/.tdlib`, `.tdlib-build`, or `Layer/`.
+---
 
-### Layer 1 reports `No module named peft`
+<div align="center">
 
-The ML extra was not installed:
+**Detectives · Tech4City hackathon submission**
 
-```powershell
-py -3.11 -m uv sync --locked --dev --extra ml --link-mode=copy
-```
-
-### Hugging Face returns an authorization error
-
-The adapter references a gated base model. Confirm that the account has access and that
-`HF_TOKEN` is set in the ignored `backend/.env`.
-
-### Importing Layer 1 asks for `sentence_transformers`
-
-`from Layer.Layer1 import Layer1` executes `Layer/__init__.py`, which currently imports Layer 2.
-Use the backend-adapter smoke test documented above. Layer 2 dependencies are not required for
-Layer 1 application testing.
-
-### TDLib reports that `td.binlog` is locked
-
-Only one TDLib client may open a session database. Stop other tech4city application processes and
-retry. Concurrent requests within one application share a single restoration task.
-
-### Seeded messages disappear
-
-`TECH4CITY_STORAGE=memory` is intentionally disposable. Use the MongoDB test configuration when
-restart persistence is required.
-
-### `seed_demo.py` reports `analysis failed`
-
-The backend accepted the messages, but the configured analyzer failed. For Layer 1, run the direct
-smoke test first so dependency, token, download, and model errors are visible outside the worker.
-
-## Research utilities
-
-Other research and training utilities are not required for application testing. Install them
-separately:
-
-```powershell
-py -3.11 -m uv sync --locked --dev --extra research --link-mode=copy
-```
-
-Utilities that call OpenAI require `OPENAI_API_KEY` in the ignored root `.env`.
-
-## Technical documentation
-
-- [Application startup](README-APP.md): current backend, React frontend, Telegram smoke, health,
-  shutdown, and troubleshooting workflow.
-- [Architecture](ARCHITECTURE.md): system design, boundaries, and current limitations.
-- [Backend reference](backend/README.md): configuration, persistence, API contracts, and WebSocket
-  events.
-- [TDLib guide](README-TDLIB.md): native build, credentials, interactive tests, and security.
-- [Frontend folder](frontend/README.md): React structure, development workflow, production build, and runtime behavior.
+</div>

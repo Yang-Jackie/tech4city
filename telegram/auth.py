@@ -49,7 +49,7 @@ def authorize(client: TdJsonClient, config: TdlibConfig) -> None:
                     "api_id": config.api_id,
                     "api_hash": config.api_hash,
                     "system_language_code": "en",
-                    "device_model": "tech4city Python TDLib CLI",
+                    "device_model": "Detectives Python TDLib CLI",
                     "system_version": "Windows",
                     "application_version": "1.0.0",
                 },

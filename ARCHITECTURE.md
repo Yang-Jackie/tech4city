@@ -1,4 +1,4 @@
-# Backend Architecture and Current Workflow
+# Detectives Architecture and Current Workflow
 
 ## What We Can Offer Now
 
@@ -250,7 +250,7 @@ relabeled as bully probability.
 Storage, analysis, and worker implementations are selectable adapters. Memory plus fake analysis
 is the default offline shape; MongoDB provides restart persistence; local models replace the analyzer
 through the same worker contract. See the [backend reference](backend/README.md#runtime-configuration)
-for the exact configuration surface and the root [operational guide](README.md#optional-integrations)
+for the exact configuration surface and the root [operational guide](README.md#optional-mongodb-persistence)
 for setup.
 
 The current deployment is a development modular monolith. It has no API authentication, tenant

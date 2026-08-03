@@ -6,20 +6,27 @@ from pathlib import Path
 import pytest
 from app.config import ConfigurationError, Settings
 
+DETECTIVES_ENVIRONMENT_NAMES = (
+    "DETECTIVES_STORAGE",
+    "DETECTIVES_ANALYZER",
+    "DETECTIVES_WORKER_ENABLED",
+    "DETECTIVES_WORKER_POLL_SECONDS",
+    "DETECTIVES_LAYER1_MODEL_DIR",
+    "DETECTIVES_LAYER1_PIPELINE_VERSION",
+    "DETECTIVES_LAYER2_CLASSIFIER_HEAD_PATH",
+    "DETECTIVES_LAYER2_TEXT_EMBEDDING_MODEL",
+    "DETECTIVES_LAYER2_PIPELINE_VERSION",
+    "DETECTIVES_LAYER3_MODEL",
+    "DETECTIVES_LAYER3_PIPELINE_VERSION",
+)
 ENVIRONMENT_NAMES = (
-    "TECH4CITY_STORAGE",
+    *DETECTIVES_ENVIRONMENT_NAMES,
+    *(
+        name.replace("DETECTIVES_", "TECH4CITY_")
+        for name in DETECTIVES_ENVIRONMENT_NAMES
+    ),
     "MONGODB_URI",
     "MONGODB_DATABASE",
-    "TECH4CITY_ANALYZER",
-    "TECH4CITY_WORKER_ENABLED",
-    "TECH4CITY_WORKER_POLL_SECONDS",
-    "TECH4CITY_LAYER1_MODEL_DIR",
-    "TECH4CITY_LAYER1_PIPELINE_VERSION",
-    "TECH4CITY_LAYER2_CLASSIFIER_HEAD_PATH",
-    "TECH4CITY_LAYER2_TEXT_EMBEDDING_MODEL",
-    "TECH4CITY_LAYER2_PIPELINE_VERSION",
-    "TECH4CITY_LAYER3_MODEL",
-    "TECH4CITY_LAYER3_PIPELINE_VERSION",
     "OPENAI_API_KEY",
 )
 MISSING_ENV = Path(__file__).with_name("missing-test.env")
@@ -39,7 +46,7 @@ def test_settings_default_to_offline_memory(
 
     assert settings.storage == "memory"
     assert settings.mongodb_uri is None
-    assert settings.mongodb_database == "tech4city"
+    assert settings.mongodb_database == "detectives"
     assert settings.analyzer == "fake"
     assert settings.worker_enabled is True
     assert settings.worker_poll_seconds == 0.25
@@ -56,7 +63,7 @@ def test_mongodb_storage_requires_uri(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clear_storage_environment(monkeypatch)
-    monkeypatch.setenv("TECH4CITY_STORAGE", "mongodb")
+    monkeypatch.setenv("DETECTIVES_STORAGE", "mongodb")
 
     with pytest.raises(ConfigurationError, match="MONGODB_URI is required"):
         Settings.load(MISSING_ENV)
@@ -66,15 +73,15 @@ def test_settings_load_mongodb_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clear_storage_environment(monkeypatch)
-    monkeypatch.setenv("TECH4CITY_STORAGE", "mongodb")
+    monkeypatch.setenv("DETECTIVES_STORAGE", "mongodb")
     monkeypatch.setenv("MONGODB_URI", "mongodb://database.test:27017/")
-    monkeypatch.setenv("MONGODB_DATABASE", "tech4city_test")
+    monkeypatch.setenv("MONGODB_DATABASE", "detectives_test")
 
     settings = Settings.load(MISSING_ENV)
 
     assert settings.storage == "mongodb"
     assert settings.mongodb_uri == "mongodb://database.test:27017/"
-    assert settings.mongodb_database == "tech4city_test"
+    assert settings.mongodb_database == "detectives_test"
 
 
 def test_settings_load_layer1_environment(
@@ -82,11 +89,11 @@ def test_settings_load_layer1_environment(
 ) -> None:
     clear_storage_environment(monkeypatch)
     model_dir = Path("C:/approved-model")
-    monkeypatch.setenv("TECH4CITY_ANALYZER", "layer1")
-    monkeypatch.setenv("TECH4CITY_WORKER_ENABLED", "false")
-    monkeypatch.setenv("TECH4CITY_WORKER_POLL_SECONDS", "1.5")
-    monkeypatch.setenv("TECH4CITY_LAYER1_MODEL_DIR", str(model_dir))
-    monkeypatch.setenv("TECH4CITY_LAYER1_PIPELINE_VERSION", "layer1-test-v2")
+    monkeypatch.setenv("DETECTIVES_ANALYZER", "layer1")
+    monkeypatch.setenv("DETECTIVES_WORKER_ENABLED", "false")
+    monkeypatch.setenv("DETECTIVES_WORKER_POLL_SECONDS", "1.5")
+    monkeypatch.setenv("DETECTIVES_LAYER1_MODEL_DIR", str(model_dir))
+    monkeypatch.setenv("DETECTIVES_LAYER1_PIPELINE_VERSION", "layer1-test-v2")
 
     settings = Settings.load(MISSING_ENV)
 
@@ -102,10 +109,12 @@ def test_settings_load_layer1_layer2_environment(
 ) -> None:
     clear_storage_environment(monkeypatch)
     classifier_head = Path("C:/approved-layer2-head.pth")
-    monkeypatch.setenv("TECH4CITY_ANALYZER", "layer1-layer2")
-    monkeypatch.setenv("TECH4CITY_LAYER2_CLASSIFIER_HEAD_PATH", str(classifier_head))
-    monkeypatch.setenv("TECH4CITY_LAYER2_TEXT_EMBEDDING_MODEL", "approved-text-encoder")
-    monkeypatch.setenv("TECH4CITY_LAYER2_PIPELINE_VERSION", "layer2-test-v2")
+    monkeypatch.setenv("DETECTIVES_ANALYZER", "layer1-layer2")
+    monkeypatch.setenv("DETECTIVES_LAYER2_CLASSIFIER_HEAD_PATH", str(classifier_head))
+    monkeypatch.setenv(
+        "DETECTIVES_LAYER2_TEXT_EMBEDDING_MODEL", "approved-text-encoder"
+    )
+    monkeypatch.setenv("DETECTIVES_LAYER2_PIPELINE_VERSION", "layer2-test-v2")
 
     settings = Settings.load(MISSING_ENV)
 
@@ -119,9 +128,9 @@ def test_settings_load_layer3_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     clear_storage_environment(monkeypatch)
-    monkeypatch.setenv("TECH4CITY_ANALYZER", "layer3")
-    monkeypatch.setenv("TECH4CITY_LAYER3_MODEL", "approved-layer3-model")
-    monkeypatch.setenv("TECH4CITY_LAYER3_PIPELINE_VERSION", "layer3-test-v2")
+    monkeypatch.setenv("DETECTIVES_ANALYZER", "layer3")
+    monkeypatch.setenv("DETECTIVES_LAYER3_MODEL", "approved-layer3-model")
+    monkeypatch.setenv("DETECTIVES_LAYER3_PIPELINE_VERSION", "layer3-test-v2")
     monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
 
     settings = Settings.load(MISSING_ENV)
@@ -138,7 +147,7 @@ def test_settings_load_repository_env_as_fallback(
     clear_storage_environment(monkeypatch)
     backend_env = tmp_path / "backend.env"
     repository_env = tmp_path / "repository.env"
-    backend_env.write_text("TECH4CITY_ANALYZER=layer3\n", encoding="utf-8")
+    backend_env.write_text("DETECTIVES_ANALYZER=layer3\n", encoding="utf-8")
     repository_env.write_text(
         "OPENAI_API_KEY=test-repository-key\n",
         encoding="utf-8",
@@ -159,7 +168,7 @@ def test_layer3_requires_openai_api_key(
 ) -> None:
     clear_storage_environment(monkeypatch)
     env_path = tmp_path / "layer3.env"
-    env_path.write_text("TECH4CITY_ANALYZER=layer3\n", encoding="utf-8")
+    env_path.write_text("DETECTIVES_ANALYZER=layer3\n", encoding="utf-8")
 
     with pytest.raises(ConfigurationError, match="OPENAI_API_KEY is required"):
         Settings.load(env_path)
@@ -168,9 +177,9 @@ def test_layer3_requires_openai_api_key(
 @pytest.mark.parametrize(
     ("name", "value", "match"),
     [
-        ("TECH4CITY_ANALYZER", "unsupported", "must be"),
-        ("TECH4CITY_WORKER_ENABLED", "sometimes", "boolean"),
-        ("TECH4CITY_WORKER_POLL_SECONDS", "0", "greater than zero"),
+        ("DETECTIVES_ANALYZER", "unsupported", "must be"),
+        ("DETECTIVES_WORKER_ENABLED", "sometimes", "boolean"),
+        ("DETECTIVES_WORKER_POLL_SECONDS", "0", "greater than zero"),
     ],
 )
 def test_invalid_runtime_configuration_is_rejected(
@@ -184,3 +193,35 @@ def test_invalid_runtime_configuration_is_rejected(
 
     with pytest.raises(ConfigurationError, match=match):
         Settings.load(MISSING_ENV)
+
+
+def test_legacy_environment_name_remains_compatible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_storage_environment(monkeypatch)
+    monkeypatch.setenv("TECH4CITY_ANALYZER", "layer1")
+
+    assert Settings.load(MISSING_ENV).analyzer == "layer1"
+
+
+def test_legacy_storage_name_keeps_the_existing_database_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_storage_environment(monkeypatch)
+    monkeypatch.setenv("TECH4CITY_STORAGE", "mongodb")
+    monkeypatch.setenv("MONGODB_URI", "mongodb://database.test:27017/")
+
+    settings = Settings.load(MISSING_ENV)
+
+    assert settings.storage == "mongodb"
+    assert settings.mongodb_database == "tech4city"
+
+
+def test_detectives_environment_name_takes_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clear_storage_environment(monkeypatch)
+    monkeypatch.setenv("DETECTIVES_ANALYZER", "fake")
+    monkeypatch.setenv("TECH4CITY_ANALYZER", "layer1")
+
+    assert Settings.load(MISSING_ENV).analyzer == "fake"

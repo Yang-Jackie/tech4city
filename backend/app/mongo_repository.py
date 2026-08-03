@@ -31,7 +31,7 @@ class MongoRepository:
     def __init__(self, uri: str, database_name: str) -> None:
         self._client: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(
             uri,
-            appname="tech4city-backend",
+            appname="detectives-backend",
             serverSelectionTimeoutMS=5_000,
             tz_aware=True,
         )

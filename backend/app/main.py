@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 from fastapi import (
     Cookie,
+    Depends,
     FastAPI,
     HTTPException,
     Query,
@@ -133,7 +134,7 @@ def create_app(
                 await active_repository.close()
 
     app = FastAPI(
-        title="tech4city backend",
+        title="Detectives backend",
         version="0.5.0",
         description="Backend API with injectable memory or MongoDB persistence.",
         lifespan=lifespan,
@@ -203,7 +204,9 @@ def create_app(
                 if chat_id is not None and not isinstance(chat_id, int):
                     chat_id = None
                 if session_id:
-                    owner = websocket.cookies.get("tech4city_owner")
+                    owner = websocket.cookies.get(
+                        "detectives_owner"
+                    ) or websocket.cookies.get("tech4city_owner")
                     if not owner:
                         await websocket.close(code=1008, reason="Owner missing")
                         return
@@ -360,6 +363,13 @@ def create_app(
             )
         return owner
 
+    def browser_owner(
+        detectives_owner: str | None = Cookie(default=None),
+        tech4city_owner: str | None = Cookie(default=None),
+    ) -> str | None:
+        """Return the canonical cookie, accepting the previous name during migration."""
+        return detectives_owner or tech4city_owner
+
     async def telegram_action(action: Any) -> Any:
         try:
             return await action
@@ -396,23 +406,22 @@ def create_app(
     )
     async def create_telegram_login(
         response: Response,
-        tech4city_owner: str | None = Cookie(default=None),
+        owner_cookie: str | None = Depends(browser_owner),
     ) -> TelegramLoginStatus:
         import secrets
 
-        owner = tech4city_owner or secrets.token_urlsafe(32)
+        owner = owner_cookie or secrets.token_urlsafe(32)
         result = await telegram_action(app.state.telegram_manager.create(owner))
         await publish_telegram_status(result)
-        if tech4city_owner is None:
-            response.set_cookie(
-                "tech4city_owner",
-                owner,
-                httponly=True,
-                samesite="strict",
-                secure=False,
-                path="/",
-                max_age=60 * 60 * 24 * 30,
-            )
+        response.set_cookie(
+            "detectives_owner",
+            owner,
+            httponly=True,
+            samesite="strict",
+            secure=False,
+            path="/",
+            max_age=60 * 60 * 24 * 30,
+        )
         response.headers["Cache-Control"] = "no-store"
         return TelegramLoginStatus(**result)
 
@@ -423,12 +432,10 @@ def create_app(
     async def telegram_login_status(
         session_id: str,
         response: Response,
-        tech4city_owner: str | None = Cookie(default=None),
+        owner_cookie: str | None = Depends(browser_owner),
     ) -> TelegramLoginStatus:
         result = await telegram_action(
-            app.state.telegram_manager.status(
-                session_id, require_owner(tech4city_owner)
-            )
+            app.state.telegram_manager.status(session_id, require_owner(owner_cookie))
         )
         response.headers["Cache-Control"] = "no-store"
         return TelegramLoginStatus(**result)
@@ -455,10 +462,10 @@ def create_app(
         session_id: str,
         body: LoginValue,
         response: Response,
-        tech4city_owner: str | None = Cookie(default=None),
+        owner_cookie: str | None = Depends(browser_owner),
     ) -> TelegramLoginStatus:
         response.headers["Cache-Control"] = "no-store"
-        return await submit_telegram_value(session_id, tech4city_owner, "phone", body)
+        return await submit_telegram_value(session_id, owner_cookie, "phone", body)
 
     @app.post(
         "/telegram/login/{session_id}/code",
@@ -468,10 +475,10 @@ def create_app(
         session_id: str,
         body: LoginValue,
         response: Response,
-        tech4city_owner: str | None = Cookie(default=None),
+        owner_cookie: str | None = Depends(browser_owner),
     ) -> TelegramLoginStatus:
         response.headers["Cache-Control"] = "no-store"
-        return await submit_telegram_value(session_id, tech4city_owner, "code", body)
+        return await submit_telegram_value(session_id, owner_cookie, "code", body)
 
     @app.post(
         "/telegram/login/{session_id}/password",
@@ -481,11 +488,11 @@ def create_app(
         session_id: str,
         body: LoginValue,
         response: Response,
-        tech4city_owner: str | None = Cookie(default=None),
+        owner_cookie: str | None = Depends(browser_owner),
     ) -> TelegramLoginStatus:
         response.headers["Cache-Control"] = "no-store"
         return await submit_telegram_value(
-            session_id, tech4city_owner, "password", body
+            session_id, owner_cookie, "password", body
         )
 
     @app.post(
@@ -495,11 +502,11 @@ def create_app(
     async def logout_telegram(
         session_id: str,
         response: Response,
-        tech4city_owner: str | None = Cookie(default=None),
+        owner_cookie: str | None = Depends(browser_owner),
     ) -> TelegramLogoutStatus:
         result = await telegram_action(
             app.state.telegram_manager.logout(
-                session_id, require_owner(tech4city_owner)
+                session_id, require_owner(owner_cookie)
             )
         )
         await publish_telegram_status(result)
@@ -535,11 +542,11 @@ def create_app(
     async def list_owned_telegram_chats(
         session_id: str,
         response: Response,
-        tech4city_owner: str | None = Cookie(default=None),
+        owner_cookie: str | None = Depends(browser_owner),
     ) -> list[TelegramChatSummary]:
         chats = await telegram_action(
             app.state.telegram_manager.list_chats(
-                session_id, require_owner(tech4city_owner)
+                session_id, require_owner(owner_cookie)
             )
         )
         response.headers["Cache-Control"] = "no-store"
@@ -553,12 +560,12 @@ def create_app(
         session_id: str,
         chat_id: int,
         response: Response,
-        tech4city_owner: str | None = Cookie(default=None),
+        owner_cookie: str | None = Depends(browser_owner),
     ) -> TelegramChatOpenStatus:
         result = await telegram_action(
             app.state.telegram_manager.open_chat(
                 session_id,
-                require_owner(tech4city_owner),
+                require_owner(owner_cookie),
                 chat_id,
             )
         )
@@ -573,10 +580,10 @@ def create_app(
         session_id: str,
         chat_id: int,
         response: Response,
-        tech4city_owner: str | None = Cookie(default=None),
+        owner_cookie: str | None = Depends(browser_owner),
     ) -> list[StoredMessage]:
         account_id = await owned_selected_telegram_chat(
-            session_id, tech4city_owner, chat_id
+            session_id, owner_cookie, chat_id
         )
         response.headers["Cache-Control"] = "no-store"
         return await app.state.repository.list_chat_messages(account_id, chat_id)
@@ -589,10 +596,10 @@ def create_app(
         session_id: str,
         chat_id: int,
         response: Response,
-        tech4city_owner: str | None = Cookie(default=None),
+        owner_cookie: str | None = Depends(browser_owner),
     ) -> list[MessageReport]:
         account_id = await owned_selected_telegram_chat(
-            session_id, tech4city_owner, chat_id
+            session_id, owner_cookie, chat_id
         )
         messages = await app.state.repository.list_chat_messages(account_id, chat_id)
 
@@ -620,10 +627,10 @@ def create_app(
         chat_id: int,
         message_id: int,
         response: Response,
-        tech4city_owner: str | None = Cookie(default=None),
+        owner_cookie: str | None = Depends(browser_owner),
     ) -> MessageReport:
         account_id = await owned_selected_telegram_chat(
-            session_id, tech4city_owner, chat_id
+            session_id, owner_cookie, chat_id
         )
         key = (account_id, chat_id, message_id)
         message = await app.state.repository.get_message(key)
@@ -648,12 +655,12 @@ def create_app(
         session_id: str,
         message_id: int,
         response: Response,
-        tech4city_owner: str | None = Cookie(default=None),
+        owner_cookie: str | None = Depends(browser_owner),
     ) -> MessageReport:
-        account_id = await owned_telegram_account(session_id, tech4city_owner)
+        account_id = await owned_telegram_account(session_id, owner_cookie)
         selected_chat_id = await telegram_action(
             app.state.telegram_manager.selected_chat_id(
-                session_id, require_owner(tech4city_owner)
+                session_id, require_owner(owner_cookie)
             )
         )
         key = (account_id, selected_chat_id, message_id)

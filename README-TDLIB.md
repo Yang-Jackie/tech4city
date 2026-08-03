@@ -1,4 +1,4 @@
-# Standalone Python TDLib tests
+# Detectives TDLib guide
 
 This utility embeds the official TDLib JSON library in the Python process. It logs in as a
 real Telegram user, shows the current account, loads chats, reads history without explicitly
@@ -45,7 +45,7 @@ telegram/.tdlib-build/install/bin/
 
 ## 2. Prepare the Python environment
 
-Complete the root [first-time setup](README.md#first-time-setup). It creates the unified `.venv`
+Complete the root [project setup](README.md#1-install-the-project). It creates the unified `.venv`
 used by the application and interactive TDLib utility.
 
 ## 3. Configure credentials
@@ -90,13 +90,13 @@ requires you to type `yes` before it sends anything.
 
 ## Offline tests
 
-The root [verification command](README.md#verify) includes the offline TDLib and Telegram
+The root [testing guide](README.md#testing) includes the offline TDLib and Telegram
 integration test suites.
 
 ## Use TDLib with the application
 
 After the native library and credentials are ready, start the application and follow the root
-[browser-managed Telegram guide](README.md#connect-telegram-from-the-frontend). The backend owns
+[browser-managed Telegram guide](README.md#connect-telegram). The backend owns
 one isolated TDLib client per browser-connected account. Login lists the account's recent chats
 without importing their messages. Opening a chat imports its latest text history for analysis and
 streams new text messages from that selected chat.

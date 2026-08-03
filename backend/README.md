@@ -1,4 +1,4 @@
-# Backend
+# Detectives backend
 
 FastAPI backend for idempotent message ingestion, queued analysis, conversation reads, and
 message reports. It supports process-local memory for offline development and MongoDB for
@@ -25,28 +25,33 @@ compose.yaml             # Authenticated local MongoDB development service
 
 ## Runtime configuration
 
-- `TECH4CITY_STORAGE`: `memory` (default) or `mongodb`.
+- `DETECTIVES_STORAGE`: `memory` (default) or `mongodb`.
 - `MONGODB_URI`: MongoDB connection URI; required for MongoDB storage.
-- `MONGODB_DATABASE`: database name; defaults to `tech4city`.
+- `MONGODB_DATABASE`: database name; defaults to `detectives`.
 - `MONGO_ROOT_USERNAME` and `MONGO_ROOT_PASSWORD`: local Compose initialization credentials.
-- `TECH4CITY_ANALYZER`: `fake` (default), `layer1`, `layer1-layer2`, `layer3`, or
+- `DETECTIVES_ANALYZER`: `fake` (default), `layer1`, `layer1-layer2`, `layer3`, or
   `layer1-layer2-layer3`.
-- `TECH4CITY_WORKER_ENABLED`: starts automatic processing by default.
-- `TECH4CITY_WORKER_POLL_SECONDS`: positive queue poll interval; defaults to `0.25`.
-- `TECH4CITY_LAYER1_MODEL_DIR`: approved Layer 1 artifact directory.
-- `TECH4CITY_LAYER1_PIPELINE_VERSION`: version stored with every Layer 1 result.
-- `TECH4CITY_LAYER2_CLASSIFIER_HEAD_PATH`: reserved Layer 2 research artifact; the real-user
+- `DETECTIVES_WORKER_ENABLED`: starts automatic processing by default.
+- `DETECTIVES_WORKER_POLL_SECONDS`: positive queue poll interval; defaults to `0.25`.
+- `DETECTIVES_LAYER1_MODEL_DIR`: approved Layer 1 artifact directory.
+- `DETECTIVES_LAYER1_PIPELINE_VERSION`: version stored with every Layer 1 result.
+- `DETECTIVES_LAYER2_CLASSIFIER_HEAD_PATH`: reserved Layer 2 research artifact; the real-user
   pipeline does not load it while cold-start behavior is unspecified.
-- `TECH4CITY_LAYER2_TEXT_EMBEDDING_MODEL`: reserved Layer 2 research encoder identifier.
-- `TECH4CITY_LAYER2_PIPELINE_VERSION`: version for the explicit skipped Layer 2 stage.
-- `TECH4CITY_LAYER3_MODEL`: existing Layer 3 model identifier; defaults to `chatgpt-answer`.
-- `TECH4CITY_LAYER3_PIPELINE_VERSION`: version stored with Layer 3 results.
+- `DETECTIVES_LAYER2_TEXT_EMBEDDING_MODEL`: reserved Layer 2 research encoder identifier.
+- `DETECTIVES_LAYER2_PIPELINE_VERSION`: version for the explicit skipped Layer 2 stage.
+- `DETECTIVES_LAYER3_MODEL`: existing Layer 3 model identifier; defaults to `chatgpt-answer`.
+- `DETECTIVES_LAYER3_PIPELINE_VERSION`: version stored with Layer 3 results.
 - `OPENAI_API_KEY`: required when Layer 3 runs. Backend startup loads `backend/.env` first,
   then the repository-root `.env` as a fallback; existing process variables always win.
 - `HF_TOKEN`: approved Hugging Face read token required by the gated Layer 1 base model.
 
-For Atlas, keep `TECH4CITY_STORAGE=mongodb` and replace `MONGODB_URI` with the Atlas connection
+For Atlas, keep `DETECTIVES_STORAGE=mongodb` and replace `MONGODB_URI` with the Atlas connection
 string. Do not commit that string.
+
+The former `TECH4CITY_*` names remain accepted as lower-priority compatibility aliases. New
+configuration should use `DETECTIVES_*`. A legacy `TECH4CITY_STORAGE=mongodb` configuration
+without `MONGODB_DATABASE` continues to use the former database name so existing local data is
+not hidden during the rename.
 
 MongoDB collections and indexes are initialized at application startup:
 
@@ -97,7 +102,7 @@ with one isolated TDLib client per concurrent account. Cookie-protected routes
 list recent Telegram chats without importing them. An explicit chat-open request
 selects one chat in process memory and stores up to 100 recent text messages as
 context without analysis jobs. Only new text events in that chat are queued. See the root
-[Telegram frontend guide](../README.md#connect-telegram-from-the-frontend) for operation and
+[Telegram frontend guide](../README.md#connect-telegram) for operation and
 storage details.
 
 ## Live event connection
@@ -147,7 +152,7 @@ message. Reports expose its validated output under `layer3`; confidence remains 
 
 The fake analyzer remains explicitly synthetic. Local model integration exposes raw output but
 does not establish or claim model quality, safety, or accuracy. See the root
-[verification guide](../README.md#verify) for offline and live MongoDB checks.
+[testing guide](../README.md#testing) for offline and live MongoDB checks.
 
 Analyzer failures remain `analysis failed` in the public job contract. The backend log records
 the job ID, real exception type, sanitized exception message, and traceback; message text and

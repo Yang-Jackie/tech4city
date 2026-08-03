@@ -1,6 +1,7 @@
-# Frontend
+# Detectives frontend
 
 React application for reviewing selected Telegram text conversations and their available analysis.
+It is the user interface for **Detectives**, a Tech4City hackathon submission.
 The frontend does not include demo conversations or model-quality claims.
 
 ## Stack

@@ -23,7 +23,7 @@ MONGODB_TEST_URI = os.getenv("MONGODB_TEST_URI")
 )
 def test_mongodb_persists_messages_jobs_and_analysis_across_clients() -> None:
     async def scenario() -> None:
-        database_name = f"tech4city_test_{uuid4().hex}"
+        database_name = f"detectives_test_{uuid4().hex}"
         message = MessageCreate(
             telegram_account_id=100,
             chat_id=200,
@@ -95,7 +95,7 @@ def test_mongodb_persists_messages_jobs_and_analysis_across_clients() -> None:
     reason="set MONGODB_TEST_URI to run the live MongoDB persistence test",
 )
 def test_fastapi_reports_survive_application_restart() -> None:
-    database_name = f"tech4city_api_test_{uuid4().hex}"
+    database_name = f"detectives_api_test_{uuid4().hex}"
     settings = Settings(
         storage="mongodb",
         mongodb_uri=MONGODB_TEST_URI,

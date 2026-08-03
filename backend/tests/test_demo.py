@@ -27,10 +27,10 @@ def test_built_frontend_assets_are_served(tmp_path: Path) -> None:
     assets = frontend_dist / "assets"
     assets.mkdir(parents=True)
     (frontend_dist / "index.html").write_text(
-        '<!doctype html><title>Conversation review | Tech4City</title>',
+        '<!doctype html><title>Detectives | Conversation review</title>',
         encoding="utf-8",
     )
-    (assets / "app.js").write_text("window.tech4city = true;", encoding="utf-8")
+    (assets / "app.js").write_text("window.detectives = true;", encoding="utf-8")
     (assets / "app.css").write_text(":root { color-scheme: dark; }", encoding="utf-8")
 
     with TestClient(
@@ -43,7 +43,7 @@ def test_built_frontend_assets_are_served(tmp_path: Path) -> None:
     assert page.status_code == 200
     assert "Conversation review" in page.text
     assert script.status_code == 200
-    assert "tech4city" in script.text
+    assert "detectives" in script.text
     assert styles.status_code == 200
     assert "color-scheme: dark" in styles.text
 
@@ -75,7 +75,7 @@ def test_frontend_source_excludes_demo_fixtures_and_aliases() -> None:
     assert "conversation_name" not in source
     assert "getConfiguredAccountId" not in source
     assert "listBackendConversations" not in source
-    assert "Connect Telegram to start" in source
+    assert "Meet Detectives" in source
 
 
 def test_demo_and_backend_share_one_application() -> None:

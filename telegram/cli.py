@@ -104,7 +104,7 @@ def send_saved_message(client: TdJsonClient) -> None:
         {"@type": "createPrivateChat", "user_id": me["id"], "force": False}
     )
     text = (
-        "TDLib Python test from tech4city — "
+        "TDLib Python test from Detectives — "
         + datetime.now().astimezone().isoformat(timespec="seconds")
     )
     print("\nThe following real message will be sent only to Saved Messages:")

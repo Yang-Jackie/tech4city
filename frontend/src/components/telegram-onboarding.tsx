@@ -17,11 +17,14 @@ export function TelegramOnboarding({ onConnect }: TelegramOnboardingProps) {
           <Send className="size-6" aria-hidden="true" />
         </span>
         <h1 className="mt-6 text-2xl font-semibold tracking-tight text-balance">
-          Connect Telegram to start
+          Meet Detectives
         </h1>
         <p className="mt-3 max-w-lg text-sm leading-6 text-pretty text-muted-foreground sm:text-base">
-          Tech4City uses TDLib to load your Telegram chat list. Choose a chat to
-          review its text messages and analyze new messages as they arrive.
+          Connect Telegram to review a conversation and inspect new messages for
+          signs of cyberbullying as they arrive.
+        </p>
+        <p className="mt-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          A Tech4City hackathon project
         </p>
         <Button className="mt-6" size="lg" onClick={onConnect}>
           <Send aria-hidden="true" />
@@ -33,7 +36,7 @@ export function TelegramOnboarding({ onConnect }: TelegramOnboardingProps) {
             aria-hidden="true"
           />
           <p>
-            Access is read-only. Tech4City does not send, edit, or delete
+            Access is read-only. Detectives does not send, edit, or delete
             Telegram messages.
           </p>
         </div>

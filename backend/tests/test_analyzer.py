@@ -216,7 +216,7 @@ def test_runtime_settings_build_combined_analyzer_without_loading_models() -> No
     settings = Settings(
         storage="memory",
         mongodb_uri=None,
-        mongodb_database="tech4city_test",
+        mongodb_database="detectives_test",
         analyzer="layer1-layer2",
     )
 
@@ -365,7 +365,7 @@ def test_runtime_settings_build_layer3_modes_without_loading_clients() -> None:
         Settings(
             storage="memory",
             mongodb_uri=None,
-            mongodb_database="tech4city_test",
+            mongodb_database="detectives_test",
             analyzer="layer3",
         )
     )
@@ -373,7 +373,7 @@ def test_runtime_settings_build_layer3_modes_without_loading_clients() -> None:
         Settings(
             storage="memory",
             mongodb_uri=None,
-            mongodb_database="tech4city_test",
+            mongodb_database="detectives_test",
             analyzer="layer1-layer2-layer3",
         )
     )

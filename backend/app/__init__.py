@@ -1,1 +1,1 @@
-"""Minimal backend package for tech4city."""
+"""Detectives backend package."""

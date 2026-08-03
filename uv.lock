@@ -2023,7 +2023,7 @@ wheels = [
 ]
 
 [[package]]
-name = "tech4city"
+name = "detectives"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

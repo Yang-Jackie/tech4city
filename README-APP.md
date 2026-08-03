@@ -1,4 +1,4 @@
-# Run the Tech4City application
+# Run Detectives
 
 This guide starts the current application locally with two processes:
 
@@ -58,18 +58,18 @@ if (-not (Test-Path backend\.env)) {
 For the currently approved real-user flow, confirm these settings in `backend/.env`:
 
 ```dotenv
-TECH4CITY_STORAGE=memory
-TECH4CITY_ANALYZER=layer1-layer2-layer3
-TECH4CITY_WORKER_ENABLED=true
-TECH4CITY_WORKER_POLL_SECONDS=0.25
+DETECTIVES_STORAGE=memory
+DETECTIVES_ANALYZER=layer1-layer2-layer3
+DETECTIVES_WORKER_ENABLED=true
+DETECTIVES_WORKER_POLL_SECONDS=0.25
 
-TECH4CITY_LAYER1_MODEL_DIR=Layer/cyberbully-roblox-pii-lora-synbullying/best_model
-TECH4CITY_LAYER1_PIPELINE_VERSION=layer1-roblox-pii-lora-synbullying-v1
+DETECTIVES_LAYER1_MODEL_DIR=Layer/cyberbully-roblox-pii-lora-synbullying/best_model
+DETECTIVES_LAYER1_PIPELINE_VERSION=layer1-roblox-pii-lora-synbullying-v1
 
-TECH4CITY_LAYER2_PIPELINE_VERSION=layer2-skipped-real-user-v1
+DETECTIVES_LAYER2_PIPELINE_VERSION=layer2-skipped-real-user-v1
 
-TECH4CITY_LAYER3_MODEL=gpt-4o-mini
-TECH4CITY_LAYER3_PIPELINE_VERSION=layer3-gpt-4o-mini-focused-v1
+DETECTIVES_LAYER3_MODEL=gpt-4o-mini
+DETECTIVES_LAYER3_PIPELINE_VERSION=layer3-gpt-4o-mini-focused-v1
 
 HF_TOKEN=your_approved_huggingface_token
 OPENAI_API_KEY=your_openai_api_key
@@ -87,8 +87,8 @@ The configured real-user pipeline behaves as follows:
   embedding contract is approved yet.
 - Layer 3 analyzes the new message as the focus and uses earlier messages only as context.
 
-`TECH4CITY_STORAGE=memory` is convenient but disposable. Messages, jobs, and results disappear
-when the backend stops. See the root [MongoDB instructions](README.md#test-mongodb-persistence) for
+`DETECTIVES_STORAGE=memory` is convenient but disposable. Messages, jobs, and results disappear
+when the backend stops. See the root [MongoDB instructions](README.md#optional-mongodb-persistence) for
 persistent application data.
 
 ## 3. Configure Telegram
@@ -264,7 +264,7 @@ Run the frontend from a normal PowerShell terminal. Restricted sandboxes can blo
 ### Port 8765 or 5174 is already in use
 
 Use the listener inspection command in [Stop the application](#stop-the-application), verify the
-owning process, and stop only the stale Tech4City process.
+owning process, and stop only the stale Detectives process.
 
 ### TDLib reports a locked database
 
