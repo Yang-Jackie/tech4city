@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.analyzer import analyze_message
 from app.demo import create_demo_app as create_backend_demo_app
 from app.repository import InMemoryRepository
@@ -20,26 +22,60 @@ def test_root_redirects_to_demo() -> None:
     assert response.headers["location"] == "/demo/"
 
 
-def test_demo_frontend_assets_are_served() -> None:
-    with TestClient(create_demo_app(worker_enabled=False)) as client:
+def test_built_frontend_assets_are_served(tmp_path: Path) -> None:
+    frontend_dist = tmp_path / "dist"
+    assets = frontend_dist / "assets"
+    assets.mkdir(parents=True)
+    (frontend_dist / "index.html").write_text(
+        '<!doctype html><title>Conversation review | Tech4City</title>',
+        encoding="utf-8",
+    )
+    (assets / "app.js").write_text("window.tech4city = true;", encoding="utf-8")
+    (assets / "app.css").write_text(":root { color-scheme: dark; }", encoding="utf-8")
+
+    with TestClient(
+        create_demo_app(worker_enabled=False, frontend_dist_dir=frontend_dist)
+    ) as client:
         page = client.get("/demo/")
-        script = client.get("/demo/app.js")
-        styles = client.get("/demo/styles.css")
+        script = client.get("/demo/assets/app.js")
+        styles = client.get("/demo/assets/app.css")
 
     assert page.status_code == 200
     assert "Conversation review" in page.text
-    assert 'id="chat-list"' in page.text
-    assert 'id="view-analysis"' in page.text
     assert script.status_code == 200
-    assert "No approved explanation is available for this output." in script.text
-    assert "Analyzer version" in script.text
-    assert "minimumFractionDigits: 2" in script.text
-    assert "Boolean(state.telegramSessionId)" in script.text
-    assert "chatListRequestId" in script.text
-    assert '"Cancel login"' in script.text
+    assert "tech4city" in script.text
     assert styles.status_code == 200
-    assert "--primary: oklch(" in styles.text
-    assert "279.1" not in styles.text
+    assert "color-scheme: dark" in styles.text
+
+
+def test_missing_frontend_build_returns_actionable_response(tmp_path: Path) -> None:
+    with TestClient(
+        create_demo_app(
+            worker_enabled=False,
+            frontend_dist_dir=tmp_path / "missing",
+        )
+    ) as client:
+        response = client.get("/demo/")
+
+    assert response.status_code == 503
+    assert "Frontend build required" in response.text
+    assert "npm run build" in response.text
+
+
+def test_frontend_source_excludes_demo_fixtures_and_aliases() -> None:
+    frontend_dir = Path(__file__).resolve().parents[2] / "frontend"
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (frontend_dir / "src").rglob("*")
+        if path.suffix in {".ts", ".tsx"}
+    )
+
+    assert not (frontend_dir / "src" / "data" / "mock-data.ts").exists()
+    assert 'source: "mock"' not in source
+    assert "conversation_name" not in source
+    assert "getConfiguredAccountId" not in source
+    assert "listBackendConversations" not in source
+    assert "Connect Telegram to start" in source
 
 
 def test_demo_and_backend_share_one_application() -> None:

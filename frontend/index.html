@@ -2,181 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
     <meta
       name="description"
-      content="Review stored Telegram conversations and inspect available message analysis."
+      content="Connect Telegram through TDLib to review text conversations and inspect available message analysis."
     />
     <title>Conversation review | Tech4City</title>
-    <link rel="stylesheet" href="./styles.css?v=0.5.2" />
-    <script src="./app.js?v=0.5.2" defer></script>
   </head>
   <body>
-    <a class="skip-link" href="#conversation-panel">Skip to conversation</a>
-    <header class="topbar">
-      <a class="brand" href="./" aria-label="Tech4City conversation review">
-        <span class="brand-mark" aria-hidden="true">T4</span>
-        <span>
-          <strong>Tech4City</strong>
-          <small>Conversation review</small>
-        </span>
-      </a>
-
-      <form id="account-form" class="account-form">
-        <label for="account-id">Telegram account ID</label>
-        <div class="account-controls">
-          <input
-            id="account-id"
-            name="telegram_account_id"
-            inputmode="numeric"
-            autocomplete="off"
-            placeholder="e.g. 900001"
-            required
-          />
-          <button class="primary-button" type="submit">Load chats</button>
-        </div>
-      </form>
-
-      <button id="telegram-login-button" class="secondary-button" type="button">
-        Connect Telegram
-      </button>
-      <div class="connection-state" aria-live="polite">
-        <span id="connection-dot" class="state-dot state-dot--idle"></span>
-        <span id="connection-status">Enter an account ID</span>
-      </div>
-    </header>
-
-    <main id="workspace" class="workspace">
-      <nav class="chat-list-panel" aria-labelledby="chat-list-title">
-        <header class="chat-list-header">
-          <div>
-            <p class="context-label">Available conversations</p>
-            <h1 id="chat-list-title">Chats</h1>
-          </div>
-          <span id="chat-count" class="count-badge" aria-live="polite">0</span>
-        </header>
-
-        <div class="chat-search">
-          <label class="visually-hidden" for="chat-search">Search chats</label>
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="11" cy="11" r="6.5"></circle>
-            <path d="m16 16 4 4"></path>
-          </svg>
-          <input id="chat-search" type="search" placeholder="Search chats" disabled />
-        </div>
-
-        <div id="chat-list" class="chat-list">
-          <div class="compact-empty">
-            <strong>No account loaded</strong>
-            <span>Enter a demo account ID or connect Telegram to discover chats.</span>
-          </div>
-        </div>
-
-        <details class="manual-chat">
-          <summary>Open a chat by ID</summary>
-          <form id="manual-chat-form">
-            <label for="manual-chat-id">Telegram chat ID</label>
-            <div class="manual-chat-controls">
-              <input id="manual-chat-id" inputmode="numeric" placeholder="e.g. 910004" />
-              <button class="secondary-button" type="submit">Open chat</button>
-            </div>
-          </form>
-        </details>
-      </nav>
-
-      <section id="conversation-panel" class="conversation-panel" aria-labelledby="conversation-title">
-        <header class="conversation-header">
-          <button id="back-to-chats" class="icon-button back-button" type="button" aria-label="Back to chats">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
-          </button>
-          <div class="conversation-heading">
-            <p id="conversation-context" class="context-label">Live backend view</p>
-            <h2 id="conversation-title">Select a chat</h2>
-            <div id="conversation-summary" class="conversation-summary" aria-live="polite"></div>
-          </div>
-          <div class="conversation-actions">
-            <button id="refresh-button" class="secondary-button" type="button" disabled>
-              Refresh
-            </button>
-            <button
-              id="view-analysis"
-              class="primary-button"
-              type="button"
-              aria-controls="analysis-panel"
-              aria-expanded="false"
-              disabled
-            >
-              View analysis
-            </button>
-          </div>
-        </header>
-
-        <div id="message-list" class="message-list" role="log" aria-live="polite">
-          <div class="empty-state">
-            <span class="empty-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" focusable="false">
-                <path d="M5 5.75A2.75 2.75 0 0 1 7.75 3h8.5A2.75 2.75 0 0 1 19 5.75v6.5A2.75 2.75 0 0 1 16.25 15H11l-4.45 3.56A.95.95 0 0 1 5 17.82V15.9a2.75 2.75 0 0 1-2-2.65v-7.5A2.75 2.75 0 0 1 5.75 3" />
-              </svg>
-            </span>
-            <h3>Choose a conversation</h3>
-            <p>Open a chat to load its recent text messages and start their analysis jobs.</p>
-          </div>
-        </div>
-
-        <footer class="conversation-footer">
-          <span class="pulse" aria-hidden="true"></span>
-          Live updates use WebSocket, with two-second polling as a fallback.
-        </footer>
-      </section>
-    </main>
-
-    <aside
-      id="analysis-panel"
-      class="analysis-panel"
-      role="dialog"
-      aria-modal="false"
-      aria-labelledby="analysis-title"
-      hidden
-    >
-      <header class="analysis-header">
-        <div>
-          <p class="context-label">Message details</p>
-          <h2 id="analysis-title">Analysis</h2>
-        </div>
-        <button id="close-analysis" class="icon-button" type="button" aria-label="Close analysis">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
-        </button>
-      </header>
-      <div id="analysis-content" class="analysis-content">
-        <div class="analysis-empty">
-          <span class="analysis-orbit" aria-hidden="true"></span>
-          <h3>Select a message</h3>
-          <p>Choose a message to inspect its processing state and available output.</p>
-        </div>
-      </div>
-    </aside>
-
-    <dialog id="telegram-login-dialog" class="login-dialog">
-      <form id="telegram-login-form" method="dialog">
-        <div class="login-heading">
-          <div>
-            <p class="context-label">Private localhost connection</p>
-            <h2>Connect Telegram</h2>
-          </div>
-          <button id="telegram-login-close" class="icon-button" type="button" aria-label="Close">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
-          </button>
-        </div>
-        <p id="telegram-login-message">Start a secure TDLib login, then choose which chat to analyze.</p>
-        <label id="telegram-login-label" for="telegram-login-value" hidden></label>
-        <input id="telegram-login-value" autocomplete="off" hidden />
-        <div class="login-actions">
-          <button id="telegram-login-submit" class="primary-button" type="submit">Start login</button>
-          <button id="telegram-logout-button" class="secondary-button" type="button" hidden>Log out</button>
-        </div>
-      </form>
-    </dialog>
-
-    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

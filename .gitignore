@@ -237,3 +237,17 @@ backend/.pytest_cache/
 backend/pytest-cache-files-*/
 
 .agents/
+
+# Local Codex/design working state
+.impeccable/
+my-harness/
+AGENTS.md
+PRODUCT.md
+DEMO.md
+
+# The historical nested design workspace is not part of the public repository.
+frontend-preview/
+
+# Tracked React frontend generated/local files
+frontend/node_modules/
+frontend/dist/

@@ -14,10 +14,10 @@ text messages from that selected chat into the application service.
 | Persist messages and analysis state | Implemented in memory or MongoDB; authenticated MongoDB restart persistence was tested. |
 | Run analysis after ingestion | Implemented with an automatic in-process worker. |
 | Develop and demo without an ML model | Implemented with the deterministic `fake` analyzer. |
-| Invoke model-backed layers | Layer 1 is verified; Layer 2 uses an explicit zero-user vector; Layer 3 now has an offline-verified backend contract but no live OpenAI call yet. |
+| Invoke model-backed layers | Layer 1 gates downstream work; Layer 2 is an explicit no-score real-user placeholder; Layer 3 evaluates the referred new message with earlier context. |
 | Discover stored chats and read conversation/message analysis | Implemented through chat-summary, conversation, and report APIs. |
 | List and select a Telegram chat | Implemented through browser-owned TDLib routes; selection is process-local and not persisted. |
-| Serve a frontend chat interface | Implemented as a responsive chat-discovery viewer with a closable analysis drawer at `/demo/` when running `app.demo:app`. |
+| Serve a frontend chat interface | Implemented as a responsive React chat-review application; a production build is served at `/demo/` by `app.demo:app`. |
 | Operate as a secure production service | Not yet; authentication, recovery, retention, observability, and deployment hardening remain. |
 
 ## Scope
@@ -111,7 +111,7 @@ storage replaceable and allows tests to run entirely in memory.
 | `repository.py` | Storage protocol, message identity helpers, and concurrency-safe in-memory implementation. |
 | `mongo_repository.py` | Async MongoDB persistence, indexes, atomic job claims, and document/schema mapping. |
 | `worker.py` | FIFO job execution plus the application-lifecycle runner that wakes and polls automatically. |
-| `analyzer.py` | Injectable analysis interface plus lazy Layer 1, zero-user Layer 2, and conversation-level Layer 3 adapters. |
+| `analyzer.py` | Injectable analysis interface plus lazy Layer 1, explicit Layer 2 skip, and new-message-focused Layer 3 adapters. |
 | `config.py` | Environment-backed selection of storage, analyzer, worker behavior, model artifact, and pipeline version. |
 
 Dependencies point inward: routes and workers depend on protocols and schemas, while MongoDB and
@@ -192,12 +192,12 @@ Five runtime modes exist:
 - `fake`: deterministic offline behavior for development and tests.
 - `layer1`: lazily loads the existing synchronous classifier, runs inference in a worker thread,
   and stores raw `status`, `raw_label`, `normal_score`, and `bully_score` fields.
-- `layer1-layer2`: runs Layer 1 and then Layer 2, persists both raw outputs, and supplies Layer 2
-  with a 128-value zero user embedding for dataset-independent cold-start inference.
-- `layer3`: sends stored chronological context plus the current message through the existing
-  OpenAI-backed Layer 3 contract without requiring local classifier runtimes.
-- `layer1-layer2-layer3`: preserves both local raw outputs, then adds the validated Layer 3
-  conversation result.
+- `layer1-layer2`: runs Layer 1 as a gate and records an explicit no-score Layer 2 skip because
+  no real-user embedding contract exists yet.
+- `layer3`: sends stored chronological context, the current message, and its focus message ID to
+  the OpenAI-backed Layer 3 contract without requiring local classifier runtimes.
+- `layer1-layer2-layer3`: stops after a clear Layer 1 result; otherwise records the Layer 2 skip
+  and runs Layer 3 for the focused new message.
 
 Higher-level `harmful`, `severity`, `categories`, and `explanation` values remain null in local
 model modes until an explicit mapping is approved. Pipeline versions and model artifact paths

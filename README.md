@@ -5,7 +5,7 @@ and a React frontend.
 
 Use the dedicated [application startup guide](README-APP.md) for the current two-process workflow.
 `start_demo.ps1` starts the backend, analysis worker, WebSocket notifications, and browser-managed
-Telegram support. The current `frontend-preview/` React interface runs separately on port 5174.
+Telegram support. The `frontend/` React interface runs separately on port 5174 during development.
 
 ## Prerequisites
 
@@ -245,7 +245,7 @@ TDLIB_USE_TEST_DC=false
 ### Connect Telegram from the frontend
 
 1. Run `.\scripts\start_demo.ps1` for the backend.
-2. Start `frontend-preview` by following [README-APP.md](README-APP.md#5-start-the-current-frontend).
+2. Start `frontend` by following [README-APP.md](README-APP.md#5-start-the-current-frontend).
 3. Open `http://127.0.0.1:5174/` and select **Connect Telegram**.
 4. Complete the phone, code, and optional two-step-verification prompts.
 5. Choose a chat from the Telegram chat list.
@@ -313,7 +313,7 @@ Adding `-v` permanently deletes the local database.
 | Command | Type | Purpose |
 |---|---|---|
 | `py -3.11 -m uv sync ...` | One-time or dependency update | Creates or updates `.venv`; stop the application first. |
-| `.\scripts\start_demo.ps1` | Long-running | Starts the backend, worker, WebSocket, and embedded Telegram support. Start `frontend-preview` separately. |
+| `.\scripts\start_demo.ps1` | Long-running | Starts the backend, worker, WebSocket, and embedded Telegram support. Start the React frontend separately for development. |
 | `.\.venv\Scripts\python.exe backend\scripts\seed_demo.py` | One-time | Sends 12 sanitized messages to an already-running backend, waits for analysis, then exits. |
 | `.\.venv\Scripts\python.exe -m telegram.cli` | Interactive diagnostic | Tests TDLib login, chats, history, and Saved Messages independently. |
 | `docker compose ...` | Long-running service | Starts optional persistent MongoDB storage. |
@@ -413,4 +413,4 @@ Utilities that call OpenAI require `OPENAI_API_KEY` in the ignored root `.env`.
 - [Backend reference](backend/README.md): configuration, persistence, API contracts, and WebSocket
   events.
 - [TDLib guide](README-TDLIB.md): native build, credentials, interactive tests, and security.
-- [Frontend folder](frontend/README.md): static interface structure and runtime behavior.
+- [Frontend folder](frontend/README.md): React structure, development workflow, production build, and runtime behavior.

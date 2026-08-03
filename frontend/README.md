@@ -1,15 +1,52 @@
 # Frontend
 
-Build-free, read-only conversation review interface served by the FastAPI application:
+React application for reviewing selected Telegram text conversations and their available analysis.
+The frontend does not include demo conversations or model-quality claims.
 
-- `index.html` defines chat discovery, conversation, and analysis drawer structure.
-- `styles.css` defines the civic-blue responsive product UI.
-- `app.js` lists TDLib chats, explicitly opens a selected chat to start analysis,
-  receives live WebSocket notifications, and uses REST snapshots with polling
-  only as a connection fallback.
+## Stack
 
-Telegram chat selection is session-only. The frontend does not write the selected
-chat ID to local storage or keep it in the URL.
+- React 19 and TypeScript
+- Vite 8
+- Tailwind CSS 4
+- shadcn/ui with Radix primitives
 
-The frontend has no package installation or build step. See the root
-[`README.md`](../README.md) for setup, startup, optional integrations, and verification.
+## Local development
+
+Start the FastAPI backend on port 8765, then run:
+
+```powershell
+Set-Location frontend
+npm ci
+npm run dev -- --host 127.0.0.1 --port 5174 --strictPort
+```
+
+Open `http://127.0.0.1:5174/`. The Vite server proxies `/api` to
+`http://127.0.0.1:8765`. Set `VITE_DEV_BACKEND_URL` to use another local backend.
+
+A first-time visitor sees Telegram connection onboarding. The browser stores only the opaque login
+session ID; the backend owns the HttpOnly authorization cookie and TDLib session database.
+
+## Production build
+
+```powershell
+Set-Location frontend
+npm ci
+npm run build
+```
+
+The ignored `frontend/dist/` directory contains the production assets. When it exists,
+`app.demo:app` serves it at `/demo/`. Production builds use same-origin backend routes by
+default. Set `VITE_API_BASE_URL` only when deploying the frontend and backend on different
+origins.
+
+## Verification
+
+```powershell
+npm run typecheck
+npm run lint
+npm run build
+```
+
+The application imports shared frontend contracts from `src/data/models.ts`. Do not add private
+conversation fixtures, Telegram credentials, session identifiers, or local TDLib data to this
+directory.

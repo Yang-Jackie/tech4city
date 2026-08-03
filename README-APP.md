@@ -4,11 +4,11 @@ This guide starts the current application locally with two processes:
 
 1. The FastAPI backend, analysis worker, WebSocket events, and browser-managed TDLib client on
    `http://127.0.0.1:8765`.
-2. The React/Vite frontend from `frontend-preview/` on `http://127.0.0.1:5174`.
+2. The React/Vite frontend from `frontend/` on `http://127.0.0.1:5174`.
 
-The page at `http://127.0.0.1:8765/demo/` is the legacy static demo. It is not the current React
-frontend. Port 5174 is intentional because the browser-managed Telegram session is tied to that
-origin.
+During development, port 5174 preserves the established browser-managed Telegram origin. After
+`npm run build`, the same React frontend is available from the backend at
+`http://127.0.0.1:8765/demo/`.
 
 ## Prerequisites
 
@@ -37,7 +37,7 @@ py -3.11 -m uv sync --locked --dev --extra ml --extra layer3 --link-mode=copy
 Install the locked frontend dependencies:
 
 ```powershell
-Push-Location frontend-preview
+Push-Location frontend
 npm ci
 Pop-Location
 ```
@@ -139,7 +139,7 @@ use several gigabytes of memory.
 Open PowerShell terminal 2:
 
 ```powershell
-Set-Location frontend-preview
+Set-Location frontend
 npm run dev -- --host 127.0.0.1 --port 5174 --strictPort
 ```
 
@@ -215,7 +215,7 @@ Backend:
 Frontend:
 
 ```powershell
-Push-Location frontend-preview
+Push-Location frontend
 npm run typecheck
 npm run lint
 npm run build
@@ -230,9 +230,10 @@ git diff --check
 
 ## Common problems
 
-### The wrong frontend opens
+### The frontend build is missing
 
-`http://127.0.0.1:8765/demo/` is the legacy static demo. Start `frontend-preview` and use
+Run `npm ci` and `npm run build` from `frontend/` before opening
+`http://127.0.0.1:8765/demo/`. For live development, run Vite and use
 `http://127.0.0.1:5174/`.
 
 ### Telegram shows your account name instead of Saved Messages
