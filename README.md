@@ -56,8 +56,33 @@ Review interface or another consuming product
 | **Persistence options** | Fast offline memory mode or MongoDB with message identity and analysis lookup indexes. |
 | **Offline verification** | Injectable model boundaries and sanitized fixtures keep the core test suite independent of Telegram, MongoDB, and model downloads. |
 
+![Messages UI](/assets/messages.png)
+
+![Panel UI](/assets/panel.png)
+
 ---
 
+## Benchmark
+
+Seed data comes from public campus topics (NUSConfessit, NTUConfessit) and SEA-Guard / SynBullying-style pipelines.
+
+We cluster topics, assign graph IDs by sampling from a synthetic network generation algorithm, and mark toxic-user patterns to test repeated behavior.
+
+![Graph](/assets/graph.png)
+
+Zero-shot classification by GPT:
+
+![Zero-shot GPT](/assets/zero-shot_gpt.png)
+
+Layer 1 Classification:
+
+![Layer 1](/assets/layer1.png)
+
+Layer 2 Classification:
+
+![Layer 2](/assets/layer2.png)
+
+---
 ## Quick start
 
 ### 1. Install the project
