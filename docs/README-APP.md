@@ -228,6 +228,67 @@ Repository whitespace:
 git diff --check
 ```
 
+
+## API overview
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Report storage and analyzer readiness. |
+| `POST` | `/messages` | Validate, deduplicate, store, and queue a normalized text message. |
+| `GET` | `/chats` | List stored chats for a connected account. |
+| `GET` | `/chats/{chat_id}/messages` | Read a stored conversation. |
+| `GET` | `/messages/{message_id}/report` | Read the latest versioned result and job state. |
+| `POST` | `/telegram/login` | Start an isolated browser-owned Telegram login. |
+| `GET` | `/telegram/login/{session_id}/chats` | List chats owned by the browser session. |
+| `POST` | `/telegram/login/{session_id}/chats/{chat_id}/open` | Select a chat and import recent text as context. |
+| `GET` | `/ws` | Upgrade to the local WebSocket event channel. |
+
+The internal worker hook exists only for compatibility and debugging; it is unauthenticated and
+must not be exposed publicly.
+
+---
+
+## Testing
+
+The default verification path is offline and uses sanitized fixtures:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -p no:cacheprovider
+.\.venv\Scripts\ruff.exe check backend
+
+Push-Location frontend
+npm run typecheck
+npm run lint
+npm run build
+Pop-Location
+
+git diff --check
+```
+
+Optional live MongoDB tests require `MONGODB_TEST_URI`. Real Telegram and model-backed smoke tests
+require their respective credentials and approved artifacts; they are not evidence of model
+quality or safety.
+
+---
+
+## Privacy and safety
+
+The Detectives analysis brain is platform-independent; data handling ultimately depends on the
+adapter and consuming product around it. The current Telegram adapter requests read-only access
+and does not send, edit, or delete Telegram messages. The prototype stores message text locally in
+memory or in the configured MongoDB database. Browser-managed Telegram session databases and
+credentials remain in ignored local paths and environment files.
+
+When Layer 3 is enabled, the focused message and stored conversation context are sent to the
+configured OpenAI model. Connect only accounts and conversations you are authorized to process,
+and use sanitized content for development and demonstrations.
+
+Do not commit API keys, Telegram credentials, TDLib session data, raw private conversations, or
+personally identifying fixtures. Detectives surfaces model output for review and does not present
+unverified accuracy, safety, or efficacy claims.
+
+---
+
 ## Common problems
 
 ### The frontend build is missing
